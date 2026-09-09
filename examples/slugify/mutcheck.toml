@@ -1,0 +1,26 @@
+# Each mutant reverts one decision slugify makes. If the suite stays green
+# with the decision reverted, nothing is holding that decision.
+
+[run]
+suites = ["tests.test_slugify"]
+
+[[mutant]]
+name = "lowercase_dropped"
+why = "Case folding is the contract; 'Hello' and 'hello' must slug the same."
+file = "slugify.py"
+find = "text = text.lower()"
+replace = "text = text"
+
+[[mutant]]
+name = "edges_not_trimmed"
+why = "A slug must never start or end with a hyphen."
+file = "slugify.py"
+find = 'return text.strip("-")'
+replace = "return text"
+
+[[mutant]]
+name = "collapse_dropped"
+why = "Runs of separators become ONE hyphen, not one per character."
+file = "slugify.py"
+find = '"[^a-z0-9]+"'
+replace = '"[^a-z0-9]"'

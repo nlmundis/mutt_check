@@ -1,0 +1,93 @@
+# mutcheck run against itself. Every entry reverts one of the tool's own
+# load-bearing decisions and names the reason the decision exists; the unit
+# suite has to notice each one. `make check` runs this after the suite.
+#
+# A mutant goes in here only together with the test that kills it. A known
+# survivor in the dogfood spec would be a to-do dressed as evidence.
+
+[run]
+suites = ["tests.test_mutcheck"]
+
+[[mutant]]
+name = "anchor_matched_on_first_occurrence"
+why = "An anchor must appear exactly once. First-match is one refactor from retargeting silently."
+file = "mutcheck.py"
+find = "        if count != 1:"
+replace = "        if count < 1:"
+
+[[mutant]]
+name = "red_control_does_not_stop_the_run"
+why = "A red control makes every mutant look caught, including a no-op."
+file = "mutcheck.py"
+find = '''    if control.outcome != "green":
+        return report'''
+replace = '''    if False:
+        return report'''
+
+[[mutant]]
+name = "stale_counted_as_pinned"
+why = "A stale mutant tested nothing; exit 0 would report that as success."
+file = "mutcheck.py"
+find = "        if self.survived or self.stale:"
+replace = "        if self.survived:"
+
+[[mutant]]
+name = "skipped_tests_ignored_by_default"
+why = "A skipped test can catch nothing, so a skipping control is weaker than it looks."
+file = "mutcheck.py"
+find = "    if skipped and not spec.allow_skips:"
+replace = "    if False:"
+
+[[mutant]]
+name = "summary_quotes_declared_not_applied"
+why = "The closing line is what gets quoted; it must count what this run did."
+file = "mutcheck.py"
+find = '        line = (f"{self.applied} of {self.declared} mutants applied, control "'
+replace = '        line = (f"{self.declared} of {self.declared} mutants applied, control "'
+
+[[mutant]]
+name = "only_filter_ignored"
+why = "--only exists to re-run one survivor fast."
+file = "mutcheck.py"
+find = "    selected = [m for m in spec.mutants if not only or m.name in only]"
+replace = "    selected = list(spec.mutants)"
+
+[[mutant]]
+name = "unknown_only_name_silently_accepted"
+why = "A typo in --only must not turn into a run that checked nothing."
+file = "mutcheck.py"
+find = '''    if unknown:
+        raise SpecError'''
+replace = '''    if False:
+        raise SpecError'''
+
+[[mutant]]
+name = "edits_written_before_every_anchor_is_checked"
+why = "A mutant with one stale edit must apply none of them."
+file = "mutcheck.py"
+find = '''        texts[edit.file] = texts[edit.file].replace(edit.find, edit.replace, 1)
+    for file, text in texts.items():
+        write(file, text)'''
+replace = '''        texts[edit.file] = texts[edit.file].replace(edit.find, edit.replace, 1)
+        write(edit.file, texts[edit.file])'''
+
+[[mutant]]
+name = "stage_env_names_the_root_without_as"
+why = "Without `as`, the env var must point at the staged file itself."
+file = "mutcheck.py"
+find = "            env[stage.env] = str(tmp if stage.as_path else staged)"
+replace = "            env[stage.env] = str(tmp)"
+
+[[mutant]]
+name = "git_dir_copied_into_the_sandbox"
+why = "The sandbox must never carry the repository's history."
+file = "mutcheck.py"
+find = '    ".git", ".hg", ".svn", "__pycache__",'
+replace = '    ".hg", ".svn", "__pycache__",'
+
+[[mutant]]
+name = "noop_mutant_accepted"
+why = "find == replace is a mutant that changes nothing and would always survive."
+file = "mutcheck.py"
+find = "    if find == replace:"
+replace = "    if False:"

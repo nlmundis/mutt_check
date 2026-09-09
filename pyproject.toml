@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mutcheck"
+version = "0.1.0"
+description = "Prove a test suite catches the defects it claims to pin: curated mutants, a mandatory control run, and a STALE verdict."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Nathan Mundis" }]
+keywords = ["testing", "mutation-testing", "unittest", "test-quality"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = []
+
+[project.scripts]
+mutcheck = "mutcheck:main"
+
+[tool.setuptools]
+py-modules = ["mutcheck"]
