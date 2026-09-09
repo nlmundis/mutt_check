@@ -28,8 +28,8 @@ replace = '''    if False:
 name = "stale_counted_as_pinned"
 why = "A stale mutant tested nothing; exit 0 would report that as success."
 file = "mutcheck.py"
-find = "        if self.survived or self.stale:"
-replace = "        if self.survived:"
+find = "        if self.survived or self.stale or self.broken:"
+replace = "        if self.survived or self.broken:"
 
 [[mutant]]
 name = "skipped_tests_ignored_by_default"
@@ -91,3 +91,38 @@ why = "find == replace is a mutant that changes nothing and would always survive
 file = "mutcheck.py"
 find = "    if find == replace:"
 replace = "    if False:"
+
+[[mutant]]
+name = "symlink_written_through"
+why = "A symlinked source file must never be mutated in place through the link."
+file = "mutcheck.py"
+find = "        if not resolved.is_relative_to(inside):"
+replace = "        if False:"
+
+[[mutant]]
+name = "runner_crash_reported_as_caught"
+why = "A red suite proves something only when tests ran and failed. Given module names, unittest raises straight through on an import error."
+file = "mutcheck.py"
+find = "    if ran is None and returncode != 0:"
+replace = "    if False:"
+
+[[mutant]]
+name = "discovery_import_failure_reported_as_caught"
+why = "Under discovery, unittest wraps a module that failed to import in a synthetic _FailedTest and carries on."
+file = "mutcheck.py"
+find = "    if _LOAD_FAILED in text:"
+replace = "    if False:"
+
+[[mutant]]
+name = "missing_interpreter_accepted"
+why = "An interpreter that cannot start is a spec error, not a traceback."
+file = "mutcheck.py"
+find = "    if shutil.which(python) is None:"
+replace = "    if False:"
+
+[[mutant]]
+name = "line_endings_normalised_on_read"
+why = "The sandbox must differ from the project by the mutant alone, not by newlines. The matching newline='' on the write side only has an effect on Windows, so it is not pinned here."
+file = "mutcheck.py"
+find = '''        with path.open(encoding="utf-8", newline="") as handle:'''
+replace = '''        with path.open(encoding="utf-8") as handle:'''

@@ -9,7 +9,7 @@ load-bearing decision in the code under test, applies them one at a time
 to a throwaway copy of the project, and requires the suite to go red for
 every one.
 
-Three rules make the verdicts mean something:
+Four rules make the verdicts mean something:
 
 * The unmutated control runs first and must be green. A suite that is
   already red reports every mutant as caught, including a no-op.
@@ -19,8 +19,16 @@ Three rules make the verdicts mean something:
 * A mutant whose anchor is gone is STALE, and STALE fails the run. A
   check that rotted under a refactor tested nothing, and reporting that
   as success is the failure this tool exists to prevent.
+* A mutant the suite could not even load is BROKEN, not caught. A red
+  suite proves something only when tests ran and failed.
 
-Nothing in the project is modified. The spec format is in README.md.
+mutcheck never writes into the project: every edit lands in a temporary
+copy, or in a staged copy of an external file, and a path that resolves
+outside the sandbox through a symlink is refused. In copy mode the suite
+runs inside the sandbox as well. In stage mode it runs in the real tree,
+so any side effects of the suite itself are the suite's own.
+
+The spec format is in README.md.
 """
 
 from __future__ import annotations
@@ -42,14 +50,15 @@ __version__ = "0.1.0"
 
 DEFAULT_SPEC = "mutcheck.toml"
 
-#: Never copied into the sandbox. A spec's ``ignore`` list extends this.
+#: Never copied into the sandbox unless ``ignore_defaults = false``. A
+#: spec's ``ignore`` list extends this.
 DEFAULT_IGNORE: tuple[str, ...] = (
     ".git", ".hg", ".svn", "__pycache__", "*.pyc", ".mypy_cache",
     ".pytest_cache", ".ruff_cache", ".tox", ".nox", "venv", ".venv",
 )
 
 EXIT_PINNED = 0      # control green, every mutant caught
-EXIT_UNPINNED = 1    # at least one mutant survived or went stale
+EXIT_UNPINNED = 1    # at least one mutant survived, went stale, or broke
 EXIT_UNUSABLE = 2    # control red, spec invalid, or nothing could run
 
 CONTROL_NAME = "control"
@@ -57,6 +66,18 @@ CONTROL_NAME = "control"
 
 class SpecError(ValueError):
     """The spec cannot be run as written; the message says what to fix."""
+
+
+class RunError(RuntimeError):
+    """The run could not be carried out; the message says what broke.
+
+    Raised for infrastructure faults (the sandbox could not be built, the
+    interpreter could not be started), which are never a verdict.
+    """
+
+
+class _Unreadable(Exception):
+    """A target file cannot be edited; ``str(exc)`` says why."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -101,6 +122,7 @@ class Spec:
     command: tuple[str, ...] | None
     ignore: tuple[str, ...]
     allow_skips: bool
+    timeout: float | None
     stage: Stage | None
     mutants: tuple[Mutant, ...]
 
@@ -110,7 +132,7 @@ class Verdict:
     """What one sandbox run established.
 
     ``outcome`` is ``green`` or ``red`` for the control, and ``caught``,
-    ``survived`` or ``stale`` for a mutant.
+    ``survived``, ``stale`` or ``broken`` for a mutant.
     """
 
     name: str
@@ -149,15 +171,18 @@ def parse_spec(raw: dict, root: Path) -> Spec:
     if suites and command:
         raise SpecError("[run] takes `suites` or `command`, not both")
 
-    python = run.get("python", sys.executable)
-    if not isinstance(python, str) or not python:
-        raise SpecError("[run] python must be a non-empty string")
-    if os.sep in python and not os.path.isabs(python):
-        python = str(root / python)
-
+    python = _interpreter(run.get("python", sys.executable), root)
     allow_skips = run.get("allow_skips", False)
     if not isinstance(allow_skips, bool):
         raise SpecError("[run] allow_skips must be true or false")
+    ignore_defaults = run.get("ignore_defaults", True)
+    if not isinstance(ignore_defaults, bool):
+        raise SpecError("[run] ignore_defaults must be true or false")
+    timeout = run.get("timeout")
+    if timeout is not None and (isinstance(timeout, bool)
+                                or not isinstance(timeout, (int, float))
+                                or timeout <= 0):
+        raise SpecError("[run] timeout must be a positive number of seconds")
 
     stage = _parse_stage(raw.get("stage"), root)
     entries = raw.get("mutant", [])
@@ -174,11 +199,29 @@ def parse_spec(raw: dict, root: Path) -> Spec:
             raise SpecError(
                 f"{m.name}: per-mutant `suites` needs the default unittest "
                 "runner; drop [run] command or the override")
+    ignore = (DEFAULT_IGNORE if ignore_defaults else ()) + _strings(
+        run, "ignore", "[run]")
     return Spec(
         root=root, python=python, suites=suites, command=command or None,
-        ignore=DEFAULT_IGNORE + _strings(run, "ignore", "[run]"),
-        allow_skips=allow_skips, stage=stage, mutants=mutants,
+        ignore=ignore, allow_skips=allow_skips,
+        timeout=float(timeout) if timeout is not None else None,
+        stage=stage, mutants=mutants,
     )
+
+
+def _interpreter(python: object, root: Path) -> str:
+    """Resolve ``[run] python`` and refuse one that could never start."""
+    if not isinstance(python, str) or not python:
+        raise SpecError("[run] python must be a non-empty string")
+    if "/" in python or os.sep in python:
+        if not os.path.isabs(python):
+            python = str(root / python)
+        if not os.path.isfile(python):
+            raise SpecError(f"[run] python does not exist: {python}")
+        return python
+    if shutil.which(python) is None:
+        raise SpecError(f"[run] python not found on PATH: {python}")
+    return python
 
 
 def _table(raw: dict, key: str) -> dict:
@@ -281,20 +324,21 @@ def _parse_edit(raw: object, index: int, where: str, stage: Stage | None) -> Edi
 
 
 def apply_edits(edits: Iterable[Edit],
-                read: Callable[[str], str | None],
+                read: Callable[[str], str],
                 write: Callable[[str, str], None]) -> str | None:
     """Apply every edit exactly once, or return why the mutant is stale.
 
     All anchors are checked before anything is written, so a mutant whose
-    second edit is stale leaves no half-applied first edit behind.
+    second edit is stale leaves no half-applied first edit behind. ``read``
+    raises ``_Unreadable`` for a target that cannot be edited.
     """
     texts: dict[str, str] = {}
     for edit in edits:
         if edit.file not in texts:
-            text = read(edit.file)
-            if text is None:
-                return f"cannot read {edit.file or 'staged file'}"
-            texts[edit.file] = text
+            try:
+                texts[edit.file] = read(edit.file)
+            except _Unreadable as exc:
+                return str(exc)
         count = texts[edit.file].count(edit.find)
         if count != 1:
             label = edit.file or "staged file"
@@ -310,12 +354,40 @@ def _excerpt(text: str, limit: int = 60) -> str:
     return repr(flat if len(flat) <= limit else flat[:limit - 3] + "...")
 
 
-def _read_under(root: Path) -> Callable[[str], str | None]:
-    def read(file: str) -> str | None:
+def _read_text(path: Path, label: str) -> str:
+    """UTF-8 text with line endings preserved, or ``_Unreadable``."""
+    try:
+        with path.open(encoding="utf-8", newline="") as handle:
+            return handle.read()
+    except UnicodeDecodeError:
+        raise _Unreadable(f"{label} is not UTF-8; mutcheck edits UTF-8 text only")
+    except OSError:
+        raise _Unreadable(f"cannot read {label}")
+
+
+def _write_text(path: Path, text: str) -> None:
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        handle.write(text)
+
+
+def _read_under(work: Path) -> Callable[[str], str]:
+    """Reader for copy mode that refuses to reach outside the sandbox.
+
+    The tree is copied with symlinks kept as symlinks, so a symlinked file
+    or directory would otherwise be written through to the real target.
+    """
+    inside = work.resolve()
+
+    def read(file: str) -> str:
+        path = work / file
         try:
-            return (root / file).read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            return None
+            resolved = path.resolve(strict=True)
+        except OSError:
+            raise _Unreadable(f"cannot read {file}")
+        if not resolved.is_relative_to(inside):
+            raise _Unreadable(f"{file} resolves outside the sandbox through a "
+                              "symlink; refusing to write through it")
+        return _read_text(path, file)
     return read
 
 
@@ -329,51 +401,74 @@ def build_command(spec: Spec, suites: Sequence[str] | None) -> tuple[str, ...]:
     return (spec.python, "-B", "-m", "unittest", *(suites or spec.suites))
 
 
+@dataclasses.dataclass(frozen=True)
+class RunResult:
+    """One sandbox run. ``problem`` is None, ``stale`` or ``timeout``."""
+
+    completed: subprocess.CompletedProcess | None
+    problem: str | None
+    detail: str
+    sandbox: Path
+
+
 def run_sandboxed(spec: Spec, edits: Sequence[Edit],
                   suites: Sequence[str] | None = None,
-                  keep: bool = False,
-                  ) -> tuple[str | None, subprocess.CompletedProcess | None, Path]:
+                  keep: bool = False) -> RunResult:
     """Copy or stage, apply ``edits``, run the suite once.
 
-    Returns ``(stale_reason, completed, sandbox)``. Exactly one of the
-    first two is None. The sandbox is deleted unless ``keep`` is set.
+    The sandbox is deleted unless ``keep`` is set. Infrastructure faults
+    raise ``RunError``; they are never turned into a verdict.
     """
     tmp = Path(tempfile.mkdtemp(prefix="mutcheck-"))
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     try:
         if spec.stage is None:
             work = tmp / "project"
-            shutil.copytree(spec.root, work, symlinks=True,
-                            ignore=shutil.ignore_patterns(*spec.ignore))
-            stale = apply_edits(
-                edits, _read_under(work),
-                lambda f, t: (work / f).write_text(t, encoding="utf-8"))
+            try:
+                shutil.copytree(spec.root, work, symlinks=True,
+                                ignore=shutil.ignore_patterns(*spec.ignore))
+            except (OSError, shutil.Error) as exc:
+                raise RunError(f"could not copy {spec.root} into the sandbox: {exc}")
+            stale = apply_edits(edits, _read_under(work),
+                                lambda f, t: _write_text(work / f, t))
             cwd = work
         else:
             stage = spec.stage
             staged = tmp / (stage.as_path or stage.file.name)
             staged.parent.mkdir(parents=True, exist_ok=True)
             try:
-                source: str | None = stage.file.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                source = None
-            staged.write_text(source or "", encoding="utf-8")
-            stale = apply_edits(
-                edits, lambda _f: source,
-                lambda _f, t: staged.write_text(t, encoding="utf-8"))
-            if source is None and not edits:
-                stale = f"cannot read {stage.file}"
+                source = _read_text(stage.file, str(stage.file))
+            except _Unreadable as exc:
+                return RunResult(None, "stale", str(exc), tmp)
+            _write_text(staged, source)
+            stale = apply_edits(edits, lambda _f: source,
+                                lambda _f, t: _write_text(staged, t))
             cwd = spec.root
             env[stage.env] = str(tmp if stage.as_path else staged)
         if stale is not None:
-            return stale, None, tmp
-        completed = subprocess.run(
-            build_command(spec, suites), cwd=cwd, env=env,
-            capture_output=True, text=True, check=False)
-        return None, completed, tmp
+            return RunResult(None, "stale", stale, tmp)
+        command = build_command(spec, suites)
+        try:
+            completed = subprocess.run(
+                command, cwd=cwd, env=env, capture_output=True, text=True,
+                errors="replace", check=False, timeout=spec.timeout)
+        except subprocess.TimeoutExpired:
+            return RunResult(None, "timeout",
+                             f"timed out after {spec.timeout:g}s", tmp)
+        except OSError as exc:
+            raise RunError(f"cannot run {command[0]}: {exc}")
+        return RunResult(completed, None, "", tmp)
+    except RunError as exc:
+        if keep:
+            raise RunError(f"{exc} [sandbox kept at {tmp}]") from None
+        raise
     finally:
         if not keep:
-            shutil.rmtree(tmp, ignore_errors=True)
+            try:
+                shutil.rmtree(tmp)
+            except OSError as exc:
+                print(f"mutcheck: could not remove sandbox {tmp}: {exc}",
+                      file=sys.stderr)
 
 
 # --- verdicts --------------------------------------------------------------
@@ -381,6 +476,8 @@ def run_sandboxed(spec: Spec, edits: Sequence[Edit],
 _RAN_RE = re.compile(r"^Ran (\d+) tests?", re.MULTILINE)
 _SKIP_RE = re.compile(r"skipped=(\d+)|(\d+) skipped")
 _FAILED_RE = re.compile(r"^(?:FAIL|ERROR): (\S+)", re.MULTILINE)
+#: unittest reports a test module that failed to import as a synthetic test.
+_LOAD_FAILED = "unittest.loader._FailedTest"
 
 
 def _output(completed: subprocess.CompletedProcess) -> str:
@@ -393,37 +490,83 @@ def _tail(completed: subprocess.CompletedProcess, limit: int = 120) -> str:
     return last if len(last) <= limit else last[:limit - 3] + "..."
 
 
+def _tests_ran(text: str) -> int | None:
+    """How many tests unittest reports running, or None for another runner."""
+    match = _RAN_RE.search(text)
+    return int(match.group(1)) if match else None
+
+
+_EXCEPTION_RE = re.compile(r"^\w+(?:Error|Exception|Exit)\b.*$", re.MULTILINE)
+
+
+def _is_unittest(spec: Spec) -> bool:
+    """Whether the run's output is unittest's, so load failures are readable."""
+    return spec.command is None or "unittest" in spec.command
+
+
+def _load_failure(text: str, returncode: int, unittest_runner: bool) -> str | None:
+    """Why the suite could not deliver a verdict, or None when it could.
+
+    Only unittest's output is understood. Under discovery, unittest wraps
+    a module that failed to import in a synthetic ``_FailedTest`` and
+    carries on; given module names, it raises straight through and prints
+    no ``Ran N tests`` line at all. Both are a suite that never ran.
+    """
+    if not unittest_runner:
+        return None
+    exceptions = _EXCEPTION_RE.findall(text)
+    if _LOAD_FAILED in text:
+        return exceptions[-1] if exceptions else "a test module failed to import"
+    ran = _tests_ran(text)
+    if ran is None and returncode != 0:
+        return exceptions[-1] if exceptions else "the runner exited before any test ran"
+    if ran == 0:
+        return "0 tests ran"
+    return None
+
+
 def control_verdict(spec: Spec, keep: bool = False) -> Verdict:
     """Run the unmutated tree. Red, or skipped tests, means no verdict counts."""
-    stale, completed, sandbox = run_sandboxed(spec, (), keep=keep)
-    where = str(sandbox) if keep else None
-    if completed is None:
-        return Verdict(CONTROL_NAME, "red", stale or "could not run", where)
+    result = run_sandboxed(spec, (), keep=keep)
+    where = str(result.sandbox) if keep else None
+    if result.completed is None:
+        return Verdict(CONTROL_NAME, "red", result.detail, where)
+    completed = result.completed
     text = _output(completed)
-    skipped = sum(int(a or b) for a, b in _SKIP_RE.findall(text))
+    failure = _load_failure(text, completed.returncode, _is_unittest(spec))
     if completed.returncode != 0:
-        return Verdict(CONTROL_NAME, "red", _tail(completed), where)
+        return Verdict(CONTROL_NAME, "red", failure or _tail(completed), where)
+    if failure:
+        return Verdict(CONTROL_NAME, "red", failure, where)
+    skipped = sum(int(a or b) for a, b in _SKIP_RE.findall(text))
     if skipped and not spec.allow_skips:
         return Verdict(CONTROL_NAME, "red",
                        f"{skipped} test(s) skipped; a skipped test can catch "
                        "nothing. Fix them or set allow_skips = true", where)
-    ran = _RAN_RE.search(text)
-    detail = f"{ran.group(1)} tests" if ran else _tail(completed)
+    ran = _tests_ran(text)
+    detail = f"{ran} tests" if ran is not None else _tail(completed)
     if skipped:
         detail += f", {skipped} skipped"
     return Verdict(CONTROL_NAME, "green", detail, where)
 
 
 def mutant_verdict(spec: Spec, mutant: Mutant, keep: bool = False) -> Verdict:
-    """Apply one mutant and judge it: caught, survived, or stale."""
-    stale, completed, sandbox = run_sandboxed(
-        spec, mutant.edits, mutant.suites, keep=keep)
-    where = str(sandbox) if keep else None
-    if completed is None:
-        return Verdict(mutant.name, "stale", stale or "", where)
+    """Apply one mutant and judge it: caught, survived, stale, or broken."""
+    result = run_sandboxed(spec, mutant.edits, mutant.suites, keep=keep)
+    where = str(result.sandbox) if keep else None
+    if result.problem == "stale":
+        return Verdict(mutant.name, "stale", result.detail, where)
+    if result.problem == "timeout":
+        return Verdict(mutant.name, "broken", result.detail, where)
+    completed = result.completed
+    assert completed is not None
+    text = _output(completed)
+    failure = _load_failure(text, completed.returncode, _is_unittest(spec))
+    if failure:
+        return Verdict(mutant.name, "broken", failure, where)
     if completed.returncode == 0:
         return Verdict(mutant.name, "survived", "", where)
-    failed = _FAILED_RE.findall(_output(completed))
+    failed = _FAILED_RE.findall(text)
     detail = ", ".join(dict.fromkeys(failed)) if failed else _tail(completed)
     return Verdict(mutant.name, "caught", detail, where)
 
@@ -436,23 +579,30 @@ class Report:
     mutants: list[Verdict]
     declared: int
 
+    def _names(self, outcome: str) -> list[str]:
+        return [v.name for v in self.mutants if v.outcome == outcome]
+
     @property
     def applied(self) -> int:
         return sum(1 for v in self.mutants if v.outcome != "stale")
 
     @property
     def survived(self) -> list[str]:
-        return [v.name for v in self.mutants if v.outcome == "survived"]
+        return self._names("survived")
 
     @property
     def stale(self) -> list[str]:
-        return [v.name for v in self.mutants if v.outcome == "stale"]
+        return self._names("stale")
+
+    @property
+    def broken(self) -> list[str]:
+        return self._names("broken")
 
     @property
     def exit_code(self) -> int:
         if self.control.outcome != "green":
             return EXIT_UNUSABLE
-        if self.survived or self.stale:
+        if self.survived or self.stale or self.broken:
             return EXIT_UNPINNED
         return EXIT_PINNED
 
@@ -462,8 +612,9 @@ class Report:
             return ("control RED: no mutant verdict would mean anything. "
                     f"{self.control.detail}")
         line = (f"{self.applied} of {self.declared} mutants applied, control "
-                f"green, {len(self.survived)} survived, {len(self.stale)} stale")
-        names = self.survived + self.stale
+                f"green, {len(self.survived)} survived, {len(self.stale)} stale, "
+                f"{len(self.broken)} broken")
+        names = self.survived + self.stale + self.broken
         return line + (f": {', '.join(names)}" if names else "")
 
     def as_json(self) -> dict:
@@ -474,6 +625,7 @@ class Report:
             "applied": self.applied,
             "survived": self.survived,
             "stale": self.stale,
+            "broken": self.broken,
             "exit_code": self.exit_code,
         }
 
@@ -507,7 +659,7 @@ def check(spec: Spec, only: Sequence[str] = (), keep: bool = False,
 
 def format_verdict(v: Verdict, width: int) -> str:
     label = {"green": "green", "red": "RED", "caught": "caught",
-             "survived": "SURVIVED", "stale": "STALE"}[v.outcome]
+             "survived": "SURVIVED", "stale": "STALE", "broken": "BROKEN"}[v.outcome]
     line = f"  {v.name:<{width}}  {label:<8}"
     if v.detail:
         line += f"  {v.detail}"
@@ -564,7 +716,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         emit = None if args.json else (
             lambda v: print(format_verdict(v, width), flush=True))
         report = check(spec, only=args.only, keep=args.keep, emit=emit)
-    except SpecError as exc:
+    except (SpecError, RunError) as exc:
         print(f"mutcheck: {exc}", file=sys.stderr)
         return EXIT_UNUSABLE
     if args.json:

@@ -16,7 +16,7 @@ $ mutcheck
   edges_not_trimmed  caught    test_strips_leading_and_trailing_separators
   collapse_dropped   SURVIVED
 
-3 of 3 mutants applied, control green, 1 survived, 0 stale: collapse_dropped
+3 of 3 mutants applied, control green, 1 survived, 0 stale, 0 broken: collapse_dropped
 ```
 
 That run is [`examples/slugify`](examples/slugify). The suite is green. The
@@ -48,6 +48,10 @@ something narrower on purpose:
   happens to hit the right line is one refactor away from retargeting
   silently. Two occurrences is STALE too; widen the anchor to include the
   decision's own neighbouring line.
+- **A mutant the suite could not load is BROKEN, not caught.** A replace
+  with a typo turns every test module that imports the file into an import
+  error. That is a red suite, but it says nothing about whether the decision
+  is pinned, so it fails the run under its own name.
 - **Mutants can target a file the suite reads from outside the tree**, such
   as a deployed hook or a config the tests locate through an environment
   variable. The file is staged in a temp directory and the suite is pointed
@@ -77,7 +81,9 @@ suites = ["tests.test_slugify"]      # python -B -m unittest <suites>
 # command = ["pytest", "-q"]         # any command; non-zero exit is red
 # python = "venv/bin/python"         # interpreter for the suites; default: the one running mutcheck
 # ignore = ["fixtures", "scratch"]   # extra copytree ignore patterns
+# ignore_defaults = true             # false: copy .git, venv and caches too (see below)
 # allow_skips = false                # a skipping control is red unless this is true
+# timeout = 120                      # seconds per suite run; a run that exceeds it is BROKEN
 
 [[mutant]]
 name = "lowercase_dropped"
@@ -89,7 +95,15 @@ replace = "text = text"
 
 `find` must be non-empty and must appear exactly once in `file`. `replace`
 may be empty, which deletes the anchor. A mutant whose `find` equals its
-`replace` is rejected at load time, since it could never be caught.
+`replace` is rejected at load time, since it could never be caught. `python`
+is checked at load time too: a path that does not exist, or a bare name not
+on `PATH`, is a spec error rather than a traceback halfway through a run.
+
+By default the sandbox omits `.git`, `.hg`, `.svn`, `venv`, `.venv`,
+`__pycache__`, `*.pyc` and the `.mypy_cache`, `.pytest_cache`, `.ruff_cache`,
+`.tox` and `.nox` directories. A suite that shells out to `git` will go
+control-red in copy mode for that reason; set `ignore_defaults = false` and
+supply your own `ignore` list to copy the history in.
 
 ### Several edits in one mutant
 
@@ -146,7 +160,13 @@ With `as`, the copy lands at `<tmp>/<as>` and `env` is set to `<tmp>`, which
 suits a suite that resolves the file from a root such as `$HOME`. Without
 `as`, `env` is set to the path of the copy itself. In stage mode the suite
 runs in the real project directory, not a copy, because the project is not
-what is being mutated.
+what is being mutated; whatever the suite writes to its working directory
+lands there as it would under any other runner.
+
+Redirecting `HOME` replaces it for the whole run, so the suite and the
+interpreter lose git config, tool caches and anything else they read from
+there. Give `python` an absolute path in that configuration, and prefer a
+purpose-built variable when the suite can read one.
 
 ## Verdicts and exit codes
 
@@ -156,7 +176,8 @@ what is being mutated.
 | `control RED` | The unmutated tree failed, or skipped tests. Nothing else runs. Exit 2. |
 | `caught` | The suite went red with the mutant applied. The named tests are the ones that failed. |
 | `SURVIVED` | The suite stayed green. Nothing pins that decision. Exit 1. |
-| `STALE` | The anchor was not found exactly once. The mutant tested nothing. Exit 1. |
+| `STALE` | The anchor was not found exactly once, or the target could not be edited (not UTF-8, or a symlink out of the sandbox). The mutant tested nothing. Exit 1. |
+| `BROKEN` | The suite ran but could not deliver a verdict: a test module failed to import, zero tests ran, or the run hit `timeout`. Rewrite the mutant so the code still loads. Exit 1. |
 
 The closing line counts what this run did, not what the spec declares:
 `2 of 3 mutants applied` means one was stale. Quote that line, not a number
@@ -165,8 +186,13 @@ from memory.
 | Exit | When |
 |---|---|
 | 0 | Control green and every mutant caught. |
-| 1 | At least one mutant survived or went stale. |
-| 2 | Control red, spec invalid, unknown `--only` name, or nothing could run. |
+| 1 | At least one mutant survived, went stale, or was broken. |
+| 2 | Control red, spec invalid, unknown `--only` name, or the sandbox or interpreter could not be started. |
+
+BROKEN detection reads unittest's output, under the default runner or a
+`command` that contains `unittest`. Under any other runner an import
+failure is whatever that runner makes of it, which is usually a red run
+reported as `caught`; keep unittest where that distinction matters.
 
 ## Command line
 
@@ -180,7 +206,8 @@ mutcheck [spec] [--root DIR] [--only NAME ...] [--list] [--json] [--keep]
 - `--list` prints the mutants with their `why` and runs nothing.
 - `--json` prints the full report as JSON, for a CI step to read.
 - `--keep` leaves every sandbox on disk and prints its path, so a surviving
-  mutant can be inspected as the suite saw it.
+  mutant can be inspected as the suite saw it. Each sandbox is a full copy of
+  the tree and nothing removes them for you.
 
 ## Writing mutants that mean something
 
@@ -204,11 +231,15 @@ mutcheck [spec] [--root DIR] [--only NAME ...] [--list] [--json] [--keep]
 Things that went wrong in the hand-written harnesses this was distilled from,
 now handled once:
 
-- The control runs first, every time, and stops the run if red.
+- The control runs first, every time, and stops the run if red. A control
+  that ran zero tests is red too.
 - Anchors must appear exactly once; STALE fails the run.
 - Every run starts from a fresh copy of the tree (or a fresh staged copy of the
-  external file), so nothing in the project is ever modified, and mutants never
-  see each other.
+  external file), so mutcheck never writes into the project, and mutants never
+  see each other. A target that resolves outside the sandbox through a symlink
+  is refused rather than written through.
+- Line endings are preserved byte for byte, so the sandbox differs from the
+  project by the mutant alone.
 - The suite runs with `-B` and `PYTHONDONTWRITEBYTECODE=1`. CPython validates
   a cached `.pyc` against the source's size and its mtime truncated to whole
   seconds, so two mutants of equal length written within one second can run
@@ -218,6 +249,23 @@ now handled once:
   nothing, so it makes the suite weaker than its headline count suggests. Set
   `allow_skips = true` when the skips are deliberate.
 - The summary line reports counts from the run, not the spec.
+
+## Limits
+
+- **Linux and macOS.** Windows is untested: the tool relies on symlink
+  semantics and POSIX path handling, and CI runs on Ubuntu only.
+- **UTF-8 source only.** A target in another encoding is reported STALE
+  with that reason rather than edited.
+- **The sandbox is imported through the working directory.** The suite
+  runs with the sandbox as its cwd, which is where `python -m unittest` puts
+  the project on `sys.path`. A project that is importable only through an
+  installed distribution (a `src/` layout under `pip install -e .`, or a
+  non-editable install into the venv named by `python`) keeps importing the
+  installed code, and every mutant survives. Use a flat layout, or a
+  `command` that installs the sandbox first.
+- **Every run copies the tree.** That is the isolation, and it is fine for a
+  few dozen mutants over a repository of ordinary size. Trim the copy with
+  `ignore` when it is not.
 
 ## Checking mutcheck itself
 
