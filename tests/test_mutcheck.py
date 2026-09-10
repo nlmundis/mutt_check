@@ -16,6 +16,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 
@@ -138,7 +139,7 @@ class VerdictTest(MutcheckCase):
         spec = self.fx.write_spec(("ambiguous", "slugify.py", "text", "txt"))
         code, out, _ = run_main(str(spec))
         self.assertEqual(code, mutcheck.EXIT_UNPINNED)
-        self.assertRegex(out, r"ambiguous\s+STALE\s+anchor appears \d+x")
+        self.assertRegex(out, r"ambiguous\s+STALE\s+anchor appears 6x in slugify.py")
 
     def test_unreadable_target_is_stale(self):
         spec = self.fx.write_spec(("nofile", "missing.py", "a", "b"))
@@ -152,7 +153,7 @@ class VerdictTest(MutcheckCase):
         spec = self.fx.write_spec(MUTANT_LOWER)
         code, out, _ = run_main(str(spec))
         self.assertEqual(code, mutcheck.EXIT_UNUSABLE)
-        self.assertRegex(out, r"control\s+RED")
+        self.assertRegex(out, r"(?m)^  control\s+RED\s")
         self.assertNotIn("lowercase_dropped", out)
         self.assertIn("no mutant verdict would mean anything", out)
 
@@ -191,7 +192,7 @@ class VerdictTest(MutcheckCase):
         (self.fx.root / "scratch" / "note").write_text("n")
         spec = self.fx.write_spec(MUTANT_LOWER, run_extra='ignore = ["scratch"]')
         loaded = mutcheck.load_spec(spec)
-        sandbox = mutcheck.run_sandboxed(loaded, (), keep=True).sandbox
+        sandbox = mutcheck.run_once(loaded, (), keep=True).sandbox
         try:
             work = sandbox / "project"
             self.assertFalse((work / "venv").exists())
@@ -214,9 +215,10 @@ class SafetyTest(MutcheckCase):
         (self.fx.root / "slugify.py").unlink()
         os.symlink(target, self.fx.root / "slugify.py")
         spec = self.fx.write_spec(MUTANT_LOWER)
-        code, out, _ = run_main(str(spec))
-        self.assertEqual(code, mutcheck.EXIT_UNPINNED, out)
-        self.assertRegex(out, r"lowercase_dropped\s+STALE\s+.*symlink")
+        code, out, err = run_main(str(spec))
+        self.assertEqual(code, mutcheck.EXIT_UNUSABLE, out)
+        self.assertIn("symlinks in the project point outside it", err)
+        self.assertIn("slugify.py ->", err)
         self.assertEqual(target.read_text(), SLUGIFY)
 
     def test_file_under_a_symlinked_directory_is_refused(self):
@@ -225,32 +227,39 @@ class SafetyTest(MutcheckCase):
         (real / "mod.py").write_text("X = 1\n")
         os.symlink(real, self.fx.root / "pkg")
         spec = self.fx.write_spec(("x", "pkg/mod.py", "X = 1", "X = 2"))
-        code, out, _ = run_main(str(spec))
-        self.assertEqual(code, mutcheck.EXIT_UNPINNED, out)
-        self.assertRegex(out, r"x\s+STALE\s+.*symlink")
+        code, out, err = run_main(str(spec))
+        self.assertEqual(code, mutcheck.EXIT_UNUSABLE, out)
+        self.assertIn("pkg ->", err)
         self.assertEqual((real / "mod.py").read_text(), "X = 1\n")
 
     def test_mutant_that_breaks_the_import_is_broken_not_caught(self):
+        # Compiles, so only the runner can see it. Given a module by name,
+        # unittest wraps an ImportError in a _FailedTest, but lets any other
+        # exception raised at import escape, with no summary at all.
         spec = self.fx.write_spec(
-            ("typo", "slugify.py", "text = text.lower()", "text = ("))
+            ("raises", "slugify.py", "import re",
+             'import re\nraise RuntimeError("mutant raised at import")'))
         code, out, _ = run_main(str(spec))
         self.assertEqual(code, mutcheck.EXIT_UNPINNED, out)
-        self.assertRegex(out, r"typo\s+BROKEN\s+SyntaxError")
-        self.assertIn("0 survived, 0 stale, 1 broken: typo", out)
+        self.assertRegex(out, r"raises\s+BROKEN\s+RuntimeError: mutant raised at import")
+        self.assertIn("1 of 1 mutants applied, control green, 0 survived, 0 stale, "
+                      "1 broken: raises", out)
 
     def test_import_failure_under_discovery_is_broken_too(self):
         # Discovery wraps the failed module in a synthetic _FailedTest and
         # carries on, so the run has a "Ran N tests" line and an ERROR: entry
         # that would otherwise read as caught.
         spec = self.fx.write_spec(
-            ("typo", "slugify.py", "text = text.lower()", "text = ("),
+            ("missing", "slugify.py", "import re", "import re_mutcheck_missing"),
             run_extra=(f'command = ["{sys.executable}", "-B", "-m", "unittest", '
                        '"discover", "-s", "tests", "-t", "."]'))
         spec.write_text(spec.read_text().replace(
             'suites = ["tests.test_slugify"]\n', "", 1))
         code, out, _ = run_main(str(spec))
         self.assertEqual(code, mutcheck.EXIT_UNPINNED, out)
-        self.assertRegex(out, r"typo\s+BROKEN\s+SyntaxError")
+        # The root cause inside the _FailedTest block, not unittest's
+        # generic "Failed to import test module" wrapper line.
+        self.assertRegex(out, r"missing\s+BROKEN\s+ModuleNotFoundError")
 
     def test_suite_that_runs_no_tests_makes_the_control_red(self):
         (self.fx.root / "tests" / "test_empty.py").write_text("import unittest\n")
@@ -283,7 +292,7 @@ class SafetyTest(MutcheckCase):
         (self.fx.root / "slugify.py").write_bytes(crlf.encode())
         spec = self.fx.write_spec(MUTANT_LOWER)
         loaded = mutcheck.load_spec(spec)
-        result = mutcheck.run_sandboxed(loaded, loaded.mutants[0].edits, keep=True)
+        result = mutcheck.run_once(loaded, loaded.mutants[0].edits, keep=True)
         try:
             copied = (result.sandbox / "project" / "slugify.py").read_bytes()
             self.assertIn(b"\r\n", copied)
@@ -292,11 +301,11 @@ class SafetyTest(MutcheckCase):
         finally:
             shutil.rmtree(result.sandbox, ignore_errors=True)
 
-    def test_ignore_defaults_false_copies_the_git_dir(self):
+    def test_use_default_ignores_false_copies_the_git_dir(self):
         import shutil
-        spec = self.fx.write_spec(MUTANT_LOWER, run_extra="ignore_defaults = false")
+        spec = self.fx.write_spec(MUTANT_LOWER, run_extra="use_default_ignores = false")
         loaded = mutcheck.load_spec(spec)
-        result = mutcheck.run_sandboxed(loaded, (), keep=True)
+        result = mutcheck.run_once(loaded, (), keep=True)
         try:
             self.assertTrue((result.sandbox / "project" / ".git" / "HEAD").is_file())
         finally:
@@ -530,8 +539,11 @@ class SpecValidationTest(MutcheckCase):
         loaded = mutcheck.load_spec(spec)
         self.assertEqual(loaded.python,
                          str(self.fx.root.resolve() / "venv/bin/python"))
-        spec = self.fx.write_spec(MUTANT_LOWER, run_extra='python = "python3"')
-        self.assertEqual(mutcheck.load_spec(spec).python, "python3")
+        name = Path(sys.executable).name
+        path = str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", "")
+        with mock.patch.dict(os.environ, {"PATH": path}):
+            spec = self.fx.write_spec(MUTANT_LOWER, run_extra=f'python = "{name}"')
+            self.assertEqual(mutcheck.load_spec(spec).python, name)
 
     def test_missing_interpreter_is_rejected_at_load_with_exit_two(self):
         spec = self.fx.write_spec(MUTANT_LOWER, run_extra='python = "/nonexistent/python"')
@@ -585,7 +597,7 @@ class CliTest(MutcheckCase):
         self.assertEqual(report["survived"], ["collapse_dropped"])
         self.assertEqual(report["stale"], ["gone"])
         self.assertEqual(report["broken"], [])
-        self.assertEqual((report["declared"], report["applied"]), (3, 2))
+        self.assertEqual((report["selected"], report["applied"]), (3, 2))
         self.assertEqual(report["exit_code"], mutcheck.EXIT_UNPINNED)
 
     def test_keep_reports_a_sandbox_that_still_exists(self):
@@ -598,6 +610,8 @@ class CliTest(MutcheckCase):
         try:
             for p in paths:
                 self.assertTrue(p and Path(p).is_dir(), p)
+            kept = Path(report["mutants"][0]["sandbox"]) / "project" / "slugify.py"
+            self.assertNotIn("text.lower()", kept.read_text())
         finally:
             for p in paths:
                 shutil.rmtree(p, ignore_errors=True)

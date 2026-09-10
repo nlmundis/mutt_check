@@ -1,6 +1,7 @@
 # `make check` is the whole gate: the unit suite, then mutcheck run against
-# itself. Both are offline, touch nothing outside a temp dir, and finish in
-# seconds, so there is no reason to claim "done" without running it.
+# itself. Both are offline and touch nothing outside a temp dir. The unit
+# suite takes seconds; the dogfood half runs the suite again once per mutant,
+# so it takes a minute or two. `make test` alone is the fast loop.
 
 PYTHON ?= python3
 
