@@ -228,3 +228,50 @@ class ListOnlyTest(SpecCase):
         self.assertEqual(code, mutcheck.EXIT_UNUSABLE)
         self.assertIn("no such mutant: nope", err)
         self.assertEqual(out, "")
+
+
+class CommandAndPythonTest(SpecCase):
+    def test_python_with_command_is_rejected(self):
+        self.assert_rejected(
+            "python has no effect with `command`",
+            '[run]\ncommand = ["true"]\npython = "python3"\n' + toml_mutant(*MUTANT_LOWER))
+
+
+class TableShapeTest(SpecCase):
+    """Every table check, because without one an invalid spec is a traceback.
+
+    A traceback exits 1, which is the code for a mutant that survived, so an
+    unvalidated spec would read as a review finding.
+    """
+
+    def raw(self, **run):
+        return {"run": {"suites": ["tests.test_slugify"], **run},
+                "mutant": [{"name": "m", "file": "slugify.py", "find": "a", "replace": "b"}]}
+
+    def test_stage_that_is_not_a_table(self):
+        self.assert_rejected(re.escape("[stage] must be a table"),
+                             "stage = 5\n" + RUN + toml_mutant(*MUTANT_LOWER))
+
+    def test_mutant_entry_that_is_not_a_table(self):
+        # Before [run], or the key would land inside that table.
+        self.assert_rejected(re.escape("[[mutant]] #1 must be a table"),
+                             "mutant = [1]\n" + RUN)
+
+    def test_edit_entry_that_is_not_a_table(self):
+        self.assert_rejected(re.escape("edit #1 must be a table"),
+                             RUN + '[[mutant]]\nname = "m"\nedit = [1]\n')
+
+    def test_root_that_is_not_a_directory(self):
+        with self.assertRaisesRegex(mutcheck.SpecError, "project root is not a directory"):
+            mutcheck.parse_spec(self.raw(), self.fx.root / "slugify.py")
+
+    def test_python_that_is_not_a_string(self):
+        with self.assertRaisesRegex(mutcheck.SpecError, "python must be a non-empty string"):
+            mutcheck.parse_spec(self.raw(python=3), self.fx.root)
+
+    def test_env_with_a_null_byte_is_rejected(self):
+        hook = self.external_hook()
+        raw = self.raw()
+        raw["stage"] = {"file": str(hook), "env": "HOOK\0PATH"}
+        with self.assertRaisesRegex(mutcheck.SpecError, "not a variable name"):
+            mutcheck.parse_spec(raw, self.fx.root)

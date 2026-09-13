@@ -50,8 +50,8 @@ something narrower on purpose:
   decision's own neighbouring line.
 - **A mutant the suite could not load is BROKEN, not caught.** A replace
   with a typo turns every test module that imports the file into an import
-  error, and a mutated `.py` file that no longer compiles is caught before
-  the suite even runs. That is a red suite, but it says nothing about whether the decision
+  error, and a mutated file that no longer compiles is refused before the
+  suite even runs. That is a red suite, but it says nothing about whether the decision
   is pinned, so it fails the run under its own name.
 - **Mutants can target a file the suite reads from outside the tree**, such
   as a deployed hook or a config the tests locate through an environment
@@ -81,7 +81,7 @@ as its first argument. The project root is the spec's directory unless
 [run]
 suites = ["tests.test_slugify"]      # python -B -m unittest <suites>
 # command = ["pytest", "-q"]         # any command; non-zero exit is red
-# python = "venv/bin/python"         # interpreter for the suites; default: the one running mutcheck
+# python = "venv/bin/python"         # interpreter for the suites; rejected alongside `command`
 # ignore = ["fixtures", "scratch"]   # extra copytree ignore patterns
 # use_default_ignores = true             # false: copy .git, venv and caches too (see below)
 # allow_skips = false                # a skipping control is red unless this is true
@@ -191,8 +191,12 @@ A staged file that is not UTF-8 is a spec error.
 | `control RED` | The unmutated tree failed, skipped tests, ran zero tests, or ran past `timeout`. Nothing else runs. Exit 2. |
 | `caught` | The suite went red with the mutant applied. Under unittest the named tests are the ones that failed; under another runner the detail is the last line of output. |
 | `SURVIVED` | The suite stayed green. Nothing pins that decision. Exit 1. |
-| `STALE` | The anchor was not found exactly once, or the target could not be edited (not UTF-8, or a symlink out of the sandbox). The mutant tested nothing. Exit 1. |
+| `STALE` | The anchor was not found exactly once, or the target could not be edited: it is not UTF-8, the file mixes line endings, or an ignore pattern kept it out of the copy. The mutant tested nothing. Exit 1. |
 | `BROKEN` | The mutated file does not compile, or the suite ran but could not deliver a verdict: a test module failed to import, zero tests ran, or the run hit `timeout`. Rewrite the mutant so the code still loads. Exit 1. |
+
+A symlink that leaves the project, a temp directory inside it, and a staged
+file that cannot be written are all refused before the control runs, with
+exit 2. In stage mode a target that is not UTF-8 is a spec error, also exit 2.
 
 The closing line counts what this run did, not what the spec declares:
 `2 of 3 mutants applied` means one was stale. Under `--only` the second number
@@ -203,18 +207,21 @@ from memory.
 |---|---|
 | 0 | Control green and every mutant caught. |
 | 1 | At least one mutant survived, went stale, or was broken. |
-| 2 | Control red, spec invalid, unknown `--only` name, or the sandbox could not be built or the suite could not be started. |
+| 2 | Control red, spec invalid, unknown `--only` name, or the sandbox could not be built, staged, or started. |
 
-A mutated `.py` file that no longer compiles is BROKEN under any runner. That
-check is skipped for a file whose unmutated text the interpreter running
-mutcheck cannot compile, so a project written for a newer Python is never
-misjudged. The other BROKEN rules read unittest's output: a module that
-failed to import with an ImportError, and a run of zero tests, are recognised
-wherever that output appears. The one case that needs to know the runner is
-unittest letting an exception other than ImportError escape while importing a
-module it was given by name. It
-applies to the default runner and to any `command` with `unittest` in one of
-its arguments.
+A mutated Python file that no longer compiles is BROKEN under any runner. The
+target counts as Python by its suffix, by a python shebang, or by having no
+suffix at all, which covers a deployed hook; a byte-order mark does not hide
+it. The check is skipped when the unmutated text does not compile either, so a
+project written for a newer Python is never misjudged, and where `[run] python`
+names another interpreter a refusal is confirmed with that one.
+
+The other BROKEN rules read unittest's output, wherever it appears and however
+the command was spelled: a test module unittest could not import, which it
+reports as a synthetic `_FailedTest` under its own separator; a summary saying
+zero tests ran; and a red run with no summary at all whose traceback passes
+through unittest's own frames, which is what happens when a module given by
+name raises something other than an ImportError while importing.
 
 ## Command line
 
@@ -230,7 +237,8 @@ mutcheck [spec] [--root DIR] [--only NAME ...] [--list] [--json] [--keep] [--ver
 - `--json` prints the full report as JSON, for a CI step to read.
 - `--keep` leaves every sandbox on disk and prints its path, so a surviving
   mutant can be inspected as the suite saw it. Each sandbox is a full copy of
-  the tree and nothing removes them for you.
+  the tree in copy mode, or the staged file in stage mode, and nothing removes
+  them for you.
 
 The JSON report has one entry per verdict, in run order:
 
@@ -297,17 +305,30 @@ now handled once:
 
 - **Linux and macOS.** Windows is untested: the tool relies on symlink
   semantics and POSIX path handling, and CI runs on Ubuntu only.
-- **UTF-8 source only.** A target in another encoding is reported STALE
-  with that reason rather than edited.
+- **UTF-8 source only.** A target in another encoding is reported STALE in
+  copy mode, and is a spec error in stage mode, rather than edited.
 - **The sandbox is imported through `sys.path`.** The copy is put first on
-  `PYTHONPATH` and is the suite's working directory. A project that is importable only through an
+  `PYTHONPATH`, is the suite's working directory, and any `PYTHONPATH` entry
+  naming the project or a directory inside it is remapped into the copy. A
+  project that is importable only through an
   installed distribution (a `src/` layout under `pip install -e .`, or a
   non-editable install into the venv named by `python`) keeps importing the
   installed code, and every mutant survives. Use a flat layout, or a
   `command` that installs the sandbox first.
-- **Every run copies the tree.** That is the isolation, and it is fine for a
-  few dozen mutants over a repository of ordinary size. Trim the copy with
-  `ignore` when it is not.
+- **Every run in copy mode copies the tree.** That is the isolation, and it is
+  fine for a few dozen mutants over a repository of ordinary size. Trim the
+  copy with `ignore` when it is not. Stage mode copies only the staged file.
+- **A mutant that compiles but cannot be imported is a catch, not BROKEN, when
+  the suite imports inside a test body.** The import error reaches the suite as
+  a failing test, which is indistinguishable from the mutation being noticed.
+  Importing the file ourselves to tell them apart would run its top-level code,
+  which mutcheck has no business causing.
+- **Only Python targets are compile-checked.** A data file a mutant makes
+  unparseable is left to the suite.
+- **One summary per run.** A command that runs unittest twice is judged by the
+  last summary, so a skip or an import failure in the first run is not seen.
+- **A target the operating system refuses to modify** (macOS `uchg`, or an
+  immutable attribute) fails the run with exit 2 rather than being mutated.
 
 ## Checking mutcheck itself
 
@@ -318,8 +339,8 @@ make check
 That runs the unit suite and then mutcheck against its own suite using the
 [`mutcheck.toml`](mutcheck.toml) in this repository, which reverts each of
 the rules above one at a time. Both are offline and touch nothing outside a temp
-directory. The unit suite takes seconds. The dogfood half runs the suite
-again once per mutant, so it takes a minute or two.
+directory. The unit suite takes seconds. The dogfood half runs one test class
+per mutant, which for this repository's fifty mutants takes about a minute.
 
 ## License
 

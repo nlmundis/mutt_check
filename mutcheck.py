@@ -141,6 +141,9 @@ class Spec:
     timeout: float | None
     stage: Stage | None
     mutants: tuple[Mutant, ...]
+    #: Where the spec was read from, so the copy can tell a spec symlinked
+    #: into the project from a link that breaks the sandbox.
+    spec_file: Path | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -178,10 +181,11 @@ def load_spec(path: Path, root: Path | None = None) -> Spec:
         raise SpecError(f"{path}: {exc}") from None
     # The directory the spec was NAMED in, so a spec symlinked into a tree
     # runs against that tree rather than wherever the link points.
-    return parse_spec(raw, (root or path.absolute().parent).resolve())
+    return parse_spec(raw, (root or path.absolute().parent).resolve(),
+                      path.absolute())
 
 
-def parse_spec(raw: dict, root: Path) -> Spec:
+def parse_spec(raw: dict, root: Path, spec_file: Path | None = None) -> Spec:
     """Validate a decoded spec against ``root``; every problem is a SpecError."""
     if not root.is_dir():
         raise SpecError(f"project root is not a directory: {root}")
@@ -194,6 +198,9 @@ def parse_spec(raw: dict, root: Path) -> Spec:
         raise SpecError("[run] needs `suites` (unittest modules) or `command`")
     if suites and command:
         raise SpecError("[run] takes `suites` or `command`, not both")
+    if command and "python" in run:
+        raise SpecError("[run] python has no effect with `command`, which names its "
+                        "own interpreter; drop one of the two")
 
     python = _interpreter(run.get("python", sys.executable), root)
     allow_skips = run.get("allow_skips", False)
@@ -235,7 +242,7 @@ def parse_spec(raw: dict, root: Path) -> Spec:
         root=root, python=python, suites=suites, command=command or None,
         ignore=ignore, allow_skips=allow_skips,
         timeout=float(timeout) if timeout is not None else None,
-        stage=stage, mutants=mutants,
+        stage=stage, mutants=mutants, spec_file=spec_file,
     )
 
 
@@ -418,13 +425,15 @@ def apply_edits(edits: Iterable[Edit],
         text = texts[edit.file]
         find, replace = edit.find, edit.replace
         count = _occurrences(text, find)
-        if count == 0 and "\n" in find and "\r\n" in text:
-            # TOML strings carry LF. A CRLF file gets the anchor in its own
-            # line endings, so the sandbox still differs by the mutant alone.
+        if "\n" in find and "\r\n" in text and _occurrences(text, _crlf(find)) == 1:
+            # TOML strings carry LF. A CRLF file takes the anchor in its own
+            # line endings, so the sandbox differs by the mutant alone. This
+            # is preferred over an LF match, which would write a lone LF into
+            # a file that uses CRLF throughout.
             find, replace = _crlf(find), _crlf(replace)
-            count = _occurrences(text, find)
+        count = _occurrences(text, find)
         if count != 1:
-            return f"anchor appears {count}x in {edit.file}: {_excerpt(edit.find)}"
+            return _stale_reason(count, edit, text)
         texts[edit.file] = text.replace(find, replace, 1)
     for file, text in texts.items():
         write(file, text)
@@ -449,6 +458,23 @@ def _crlf(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\n", "\r\n")
 
 
+def _lf(text: str) -> str:
+    """``text`` with every line ending written as LF."""
+    return text.replace("\r\n", "\n")
+
+
+def _stale_reason(count: int, edit: Edit, text: str) -> str:
+    """Why an edit could not be applied, naming line endings when they are why.
+
+    A whitespace-flattened excerpt looks like text that is plainly in the
+    file, so a file mixing CRLF and LF has to say so itself.
+    """
+    if count == 0 and _occurrences(_lf(text), _lf(edit.find)) == 1:
+        return (f"anchor matches {edit.file} only with line endings normalised, so "
+                f"that file mixes CRLF and LF: {_excerpt(edit.find)}")
+    return f"anchor appears {count}x in {edit.file}: {_excerpt(edit.find)}"
+
+
 def _excerpt(text: str, limit: int = 60) -> str:
     flat = " ".join(text.split())
     return repr(flat if len(flat) <= limit else flat[:limit - 3] + "...")
@@ -470,11 +496,13 @@ def _write_text(path: Path, text: str) -> None:
         handle.write(text)
 
 
-def _read_under(work: Path) -> Callable[[str], str]:
+def _read_under(work: Path, root: Path | None = None) -> Callable[[str], str]:
     """Reader for copy mode that refuses to reach outside the sandbox.
 
     The tree is copied with symlinks kept as symlinks, so a symlinked file
-    or directory would otherwise be written through to the real target.
+    or directory would otherwise be written through to the real target. With
+    ``root`` given, a target the copy left out is named as excluded rather
+    than as unreadable, since it is plainly there in the project.
     """
     inside = work.resolve()
 
@@ -483,6 +511,9 @@ def _read_under(work: Path) -> Callable[[str], str]:
         try:
             resolved = path.resolve(strict=True)
         except OSError:
+            if root is not None and (root / file).exists():
+                raise _Unreadable(f"{file} is in the project but not in the sandbox, "
+                                  "so an ignore pattern excluded it")
             raise _Unreadable(f"cannot read {file}")
         if not resolved.is_relative_to(inside):
             raise _Unreadable(f"{file} resolves outside the sandbox through a "
@@ -529,6 +560,8 @@ def run_once(spec: Spec, edits: Sequence[Edit],
     is deleted afterwards unless ``keep`` is set. Infrastructure faults
     raise ``RunError`` and are never turned into a verdict.
     """
+    if spec.stage is None:
+        _refuse_temp_inside_project(spec)
     tmp = Path(tempfile.mkdtemp(prefix="mutcheck-"))
     try:
         result = _run_in(tmp, spec, edits, suites)
@@ -551,9 +584,9 @@ def _run_in(tmp: Path, spec: Spec, edits: Sequence[Edit],
     mutated: dict[str, str] = {}
     if spec.stage is None:
         work = tmp / "project"
-        _copy_project(spec, tmp, work)
+        _copy_project(spec, work)
         edits = _one_spelling_per_file(work, edits)
-        read_copy = _read_under(work)
+        read_copy = _read_under(work, spec.root)
 
         def read(file: str) -> str:
             originals[file] = read_copy(file)
@@ -567,13 +600,15 @@ def _run_in(tmp: Path, spec: Spec, edits: Sequence[Edit],
         # Put the copy first on sys.path explicitly. `python -m` adds the cwd
         # only when PYTHONSAFEPATH is unset, and a PYTHONPATH naming the real
         # tree would otherwise let the suite import the unmutated code.
-        env["PYTHONPATH"] = os.pathsep.join(
-            [str(work)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
+        env["PYTHONPATH"] = _sandbox_pythonpath(work, spec.root, env.get("PYTHONPATH", ""))
     else:
         stage = spec.stage
         staged = tmp / (stage.as_path or stage.file.name)
-        staged.parent.mkdir(parents=True, exist_ok=True)
-        _write_text(staged, stage.source)
+        try:
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            _write_text(staged, stage.source)
+        except (OSError, ValueError) as exc:
+            raise RunError(f"cannot stage {stage.file.name} at {staged}: {exc}")
         edits = [dataclasses.replace(e, file=stage.file.name) for e in edits]
 
         def read(file: str) -> str:
@@ -591,7 +626,7 @@ def _run_in(tmp: Path, spec: Spec, edits: Sequence[Edit],
     if stale is not None:
         return RunResult(None, "stale", stale, tmp)
     for file, text in mutated.items():
-        broken = _compile_error(file, originals[file], text)
+        broken = _compile_error(file, originals[file], text, spec.python)
         if broken:
             return RunResult(None, "broken", broken, tmp)
     completed = _run_suite(build_command(spec, suites), cwd, env, spec.timeout)
@@ -600,16 +635,48 @@ def _run_in(tmp: Path, spec: Spec, edits: Sequence[Edit],
     return RunResult(completed, None, "", tmp)
 
 
-def _copy_project(spec: Spec, tmp: Path, work: Path) -> None:
+def _refuse_temp_inside_project(spec: Spec) -> None:
+    """Refuse a temp directory the copy would walk into.
+
+    Checked before anything is created, so a refused run leaves nothing in
+    the project. A temp directory the ignore patterns exclude is fine: the
+    copy never descends into it.
+    """
+    temp = Path(tempfile.gettempdir()).resolve()
+    root = spec.root.resolve()
+    if not temp.is_relative_to(root):
+        return
+    inside = temp.relative_to(root)
+    if any(fnmatch.fnmatch(part, pattern)
+           for part in inside.parts for pattern in spec.ignore):
+        return
+    raise RunError(f"the temp directory {temp} is inside the project {root}, so the "
+                   "copy would include itself; set TMPDIR outside the project, or add "
+                   f"{inside.parts[0]!r} to [run] ignore")
+
+
+def _spec_link(spec: Spec) -> frozenset[str]:
+    """The spec's own path inside the project, which the sandbox never reads.
+
+    A spec symlinked into the tree it exercises is a supported layout, so
+    that one link must not count as a link out of the project.
+    """
+    if spec.spec_file is None:
+        return frozenset()
+    # Resolve the directory but not the spec itself: the spec may BE the link.
+    named = spec.spec_file.parent.resolve() / spec.spec_file.name
+    try:
+        return frozenset({str(named.relative_to(spec.root.resolve()))})
+    except ValueError:
+        return frozenset()
+
+
+def _copy_project(spec: Spec, work: Path) -> None:
     """Copy the project into ``work``, refusing a copy that would not isolate.
 
-    Raises RunError when the temp directory lies inside the project (the
-    copy would walk into itself), when an entry cannot be copied, or when a
-    symlink in the copy still reaches outside it.
+    Raises RunError when an entry cannot be copied, or when a symlink in the
+    copy still reaches outside it.
     """
-    if tmp.resolve().is_relative_to(spec.root):
-        raise RunError(f"the temp directory {tmp.parent} is inside the project, "
-                       "so the copy would include itself; set TMPDIR outside it")
     try:
         shutil.copytree(spec.root, work, symlinks=True,
                         ignore=shutil.ignore_patterns(*spec.ignore))
@@ -624,12 +691,36 @@ def _copy_project(spec: Spec, tmp: Path, work: Path) -> None:
     except (OSError, RecursionError) as exc:
         raise RunError("could not copy the project into the sandbox: "
                        f"{type(exc).__name__}: {exc}")
-    escaping = _escaping_links(work)
+    escaping = _escaping_links(work, _spec_link(spec))
     if escaping:
         raise RunError("symlinks in the project point outside it, so the suite "
                        "would write through them and import the real code: "
                        + _first_five(escaping)
                        + ". Add them to [run] ignore, or replace them with copies")
+
+
+def _sandbox_pythonpath(work: Path, root: Path, current: str) -> str:
+    """PYTHONPATH for the run: the copy first, project entries remapped into it.
+
+    An entry naming the project, or a directory inside it, would let the
+    suite import the unmutated code, which reports every mutant as
+    surviving. Such an entry is rewritten to its place in the copy.
+    """
+    root = root.resolve()
+    entries = [str(work)]
+    for entry in current.split(os.pathsep) if current else []:
+        if not entry:
+            continue
+        try:
+            resolved = Path(entry).resolve()
+        except OSError:
+            entries.append(entry)
+            continue
+        if resolved == root:
+            continue
+        entries.append(str(work / resolved.relative_to(root))
+                       if resolved.is_relative_to(root) else entry)
+    return os.pathsep.join(entries)
 
 
 def _first_five(items: Sequence[str]) -> str:
@@ -646,19 +737,22 @@ def _relative(path: str, root: Path) -> str:
         return path
 
 
-def _escaping_links(work: Path) -> list[str]:
+def _escaping_links(work: Path, skip: frozenset[str] = frozenset()) -> list[str]:
     """Symlinks in the copy that resolve outside it, as 'link -> target'.
 
     The copy keeps links as links, so an absolute link still reaches the
     real filesystem and a relative link that leaves the project dangles. A
-    link that cannot be resolved (a loop) counts as escaping.
+    link whose resolution fails counts as escaping; on Python 3.12 and
+    earlier that includes a symlink loop, which later versions resolve to
+    the link itself and so treat as inside. ``skip`` names links that are
+    allowed to leave, given as paths relative to the copy.
     """
     inside = work.resolve()
     found = []
     for dirpath, dirnames, filenames in os.walk(work):
         for name in dirnames + filenames:
             path = Path(dirpath) / name
-            if not path.is_symlink():
+            if not path.is_symlink() or str(path.relative_to(work)) in skip:
                 continue
             try:
                 escapes = not path.resolve().is_relative_to(inside)
@@ -705,14 +799,58 @@ def _write_sandboxed(path: Path, text: str) -> None:
         raise RunError(f"cannot write {path.name} in the sandbox: {exc}")
 
 
-def _compile_error(name: str, before: str, after: str) -> str | None:
+#: Suffixes that make a file Python source whatever its first line says.
+PY_SUFFIXES = (".py", ".pyw", ".pyi")
+
+
+def _is_python_source(name: str, text: str) -> bool:
+    """Whether a target is Python source: by suffix, or by a python shebang.
+
+    Classified positively, so a deployed hook with no extension is still
+    judged and a data file a mutant breaks is not mistaken for code.
+    """
+    if name.endswith(PY_SUFFIXES):
+        return True
+    first = text.split("\n", 1)[0]
+    if first.startswith("#!"):
+        return "python" in first
+    # A file with no suffix at all, such as a deployed hook: the caller's
+    # compile of the unmutated text is what actually decides, and a data
+    # file that does not parse as Python is skipped there.
+    return not Path(name).suffix
+
+
+def _compiles_with(python: str, text: str) -> bool:
+    """Whether ``python`` compiles ``text``; False when it cannot be asked.
+
+    The suite runs under ``[run] python``, which may accept syntax the
+    interpreter running mutcheck does not, so a refusal is confirmed with
+    the interpreter that will actually import the file.
+    """
+    if not python or python == sys.executable:
+        return False
+    try:
+        done = subprocess.run(
+            [python, "-c", "import sys; compile(sys.stdin.read(), 'm', 'exec')"],
+            input=text, text=True, capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
+
+def _compile_error(name: str, before: str, after: str,
+                   python: str = "") -> str | None:
     """Why a mutated Python file no longer compiles, or None.
 
-    Only a ``.py`` file whose unmutated text compiles under this interpreter
-    is judged, so a project written for a newer Python than the one running
-    mutcheck is never reported BROKEN for syntax this interpreter lacks.
+    Only a file whose unmutated text compiles is judged, so a project
+    written for a newer Python than the one running mutcheck is never
+    reported BROKEN for syntax this interpreter lacks; where the suite runs
+    under a different interpreter, a refusal is confirmed with that one. A
+    byte-order mark is stripped for the check alone: the sandbox still gets
+    the file byte for byte.
     """
-    if not name.endswith(".py"):
+    before, after = before.lstrip("\ufeff"), after.lstrip("\ufeff")
+    if not _is_python_source(name, before):
         return None
     try:
         compile(before, name, "exec", dont_inherit=True)
@@ -721,8 +859,12 @@ def _compile_error(name: str, before: str, after: str) -> str | None:
     try:
         compile(after, name, "exec", dont_inherit=True)
     except SyntaxError as exc:
+        if _compiles_with(python, after):
+            return None
         return f"mutant does not compile: {exc.msg} ({name}, line {exc.lineno})"
     except ValueError as exc:
+        if _compiles_with(python, after):
+            return None
         return f"mutant does not compile: {exc} ({name})"
     return None
 
@@ -845,28 +987,24 @@ def _skipped(text: str) -> int:
         text[match.end():] if match else text))
 
 
-def _is_unittest_command(spec: Spec) -> bool:
-    """Whether the suite command runs unittest.
-
-    True for the default runner, and for a ``command`` with 'unittest'
-    anywhere in one of its arguments, which covers ``sh -c``, ``-munittest``
-    and ``unittest.__main__``.
-    """
-    return spec.command is None or any("unittest" in part for part in spec.command)
+#: unittest's own frames, which appear however the runner was spelled.
+_UNITTEST_FRAME_RE = re.compile(r"unittest[/\\](?:loader|main|suite)\.py")
 
 
-def _load_failure(text: str, returncode: int, unittest_command: bool) -> str | None:
+def _load_failure(text: str, returncode: int) -> str | None:
     """Why the suite could not deliver a verdict, or None when it could.
 
-    Two signs are unittest's own and are read under any command: a test
-    module that failed to import with an ImportError, which unittest reports
-    as a synthetic ``_FailedTest``, and a summary saying zero tests ran. The
-    third needs to know the runner is unittest: given module names, it lets
-    any other exception raised while importing a test module escape, and
-    prints no summary at all.
+    Every sign is read out of the output, so how the runner was spelled on
+    the command line does not matter. unittest reports a module it could not
+    import as a synthetic ``_FailedTest``; a summary saying zero tests ran
+    delivered no verdict either; and unittest given a module by name lets
+    anything other than an ImportError escape while importing it, leaving a
+    traceback through unittest's own frames and no summary at all.
     """
-    if _LOAD_FAILED in text:
-        start = text.index(_LOAD_FAILED)
+    start = text.find(_LOAD_FAILED)
+    # unittest prints its own separator above the block, which text a test
+    # printed does not have, so a red run cannot be faked into BROKEN.
+    if returncode != 0 and start != -1 and _SEPARATOR in text[:start]:
         ends = [at for at in (text.find(_SEPARATOR, start),) if at != -1]
         ran = _last_ran(text)
         if ran and ran.start() > start:
@@ -876,20 +1014,41 @@ def _load_failure(text: str, returncode: int, unittest_command: bool) -> str | N
     ran_count = _tests_ran(text)
     if ran_count == 0:
         return "0 tests ran"
-    if unittest_command and ran_count is None and returncode != 0:
+    if ran_count is None and returncode != 0 and _UNITTEST_FRAME_RE.search(text):
         found = _EXCEPTION_RE.findall(text)
         return _clip(found[-1]) if found else "the runner exited before any test ran"
     return None
 
 
-def control_verdict(spec: Spec, keep: bool = False) -> Verdict:
+def _all_suites(spec: Spec, mutants: Sequence[Mutant]) -> tuple[str, ...] | None:
+    """Every suite this run can judge a mutant against, overrides included.
+
+    None when a custom command runs the suite, which takes no suite names.
+    """
+    if spec.command:
+        return None
+    listed = list(spec.suites)
+    for mutant in mutants:
+        for suite in mutant.suites or ():
+            # A class inside a module already listed is already covered, and
+            # naming both would run those tests twice in the control.
+            if suite not in listed and not any(
+                    suite.startswith(f"{other}.") for other in listed):
+                listed.append(suite)
+    return tuple(listed)
+
+
+def control_verdict(spec: Spec, mutants: Sequence[Mutant] = (),
+                    keep: bool = False) -> Verdict:
     """Run the unmutated tree once. Anything but a clean green run is RED.
 
     RED covers a failing suite, one that could not deliver a verdict, one
     that ran past the timeout, and one that skipped tests, since a skipped
-    test can catch nothing.
+    test can catch nothing. Every suite the given mutants name is run here
+    too: a mutant judged against a suite the control never ran could be
+    reported caught by a suite that was already red.
     """
-    result = run_once(spec, (), keep=keep)
+    result = run_once(spec, (), _all_suites(spec, mutants), keep=keep)
     where = str(result.sandbox) if keep else None
 
     def verdict(outcome: str, detail: str) -> Verdict:
@@ -899,7 +1058,7 @@ def control_verdict(spec: Spec, keep: bool = False) -> Verdict:
         return verdict("red", result.detail)
     completed = result.completed
     text = _output(completed)
-    failure = _load_failure(text, completed.returncode, _is_unittest_command(spec))
+    failure = _load_failure(text, completed.returncode)
     if failure or completed.returncode != 0:
         return verdict("red", failure or _tail(completed))
     skipped = _skipped(text)
@@ -926,7 +1085,7 @@ def mutant_verdict(spec: Spec, mutant: Mutant, keep: bool = False) -> Verdict:
     completed = result.completed
     assert completed is not None
     text = _output(completed)
-    failure = _load_failure(text, completed.returncode, _is_unittest_command(spec))
+    failure = _load_failure(text, completed.returncode)
     if failure:
         return verdict("broken", failure)
     if completed.returncode == 0:
@@ -1025,7 +1184,7 @@ def check(spec: Spec, only: Sequence[str] = (), keep: bool = False,
     """
     selected = select_mutants(spec, only)
     notify = emit or (lambda _v: None)
-    control = control_verdict(spec, keep=keep)
+    control = control_verdict(spec, selected, keep=keep)
     notify(control)
     report = Report(control=control, mutants=[], selected=len(selected))
     if control.outcome != "green":

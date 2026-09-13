@@ -346,3 +346,274 @@ class BrokenTest(MutcheckCase):
         self.assertEqual(code, mutcheck.EXIT_UNPINNED)
         self.assertEqual((report["selected"], report["applied"]), (1, 1))
         self.assertEqual(report["broken"], ["missing"])
+
+
+class ControlCoverageTest(MutcheckCase):
+    def test_control_runs_a_suite_only_a_mutant_names(self):
+        # Otherwise an override naming an already-red suite reports caught.
+        add_suite(self.fx.root, "test_red", '''\
+            import unittest
+
+            class RedTest(unittest.TestCase):
+                def test_fails(self):
+                    self.assertTrue(False)
+            ''')
+        spec = self.fx.write_spec(toml_mutant(
+            "bogus", "slugify.py", 'return text.strip("-")', "return text",
+            suites='["tests.test_red"]'))
+        code, out, _ = run_main(str(spec))
+        self.assertEqual(code, mutcheck.EXIT_UNUSABLE, out)
+        self.assertRegex(out, r"(?m)^  control\s+RED")
+        self.assertNotIn("caught", out)
+
+
+class CompileGuardTest(MutcheckCase):
+    IN_BODY = '''\
+        import unittest
+
+        class InBodyTest(unittest.TestCase):
+            def test_lower(self):
+                from slugify import slugify
+                self.assertEqual(slugify("Hello"), "hello")
+        '''
+
+    def test_a_byte_order_mark_does_not_disable_the_compile_check(self):
+        (self.fx.root / "slugify.py").write_bytes(b"\xef\xbb\xbf" + SLUGIFY.encode())
+        add_suite(self.fx.root, "test_inbody", self.IN_BODY)
+        spec = self.fx.write_spec(("typo", "slugify.py", "text = text.lower()", "text = ("))
+        use_suites(spec, "tests.test_inbody")
+        code, out, _ = run_main(str(spec))
+        self.assertEqual(code, mutcheck.EXIT_UNPINNED, out)
+        self.assertRegex(out, r"typo\s+BROKEN\s+mutant does not compile")
+        self.assertEqual((self.fx.root / "slugify.py").read_bytes()[:3], b"\xef\xbb\xbf")
+
+    def test_a_target_with_no_suffix_is_compile_checked(self):
+        hook = Path(self._tmp.name) / "deployed_hook"
+        hook.write_text(SLUGIFY)
+        add_suite(self.fx.root, "test_hook", '''\
+            import importlib.machinery, importlib.util, os, unittest
+
+            class HookTest(unittest.TestCase):
+                def test_lower(self):
+                    loader = importlib.machinery.SourceFileLoader("h", os.environ["HOOK_PATH"])
+                    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("h", loader))
+                    loader.exec_module(mod)
+                    self.assertEqual(mod.slugify("Hello"), "hello")
+            ''')
+        spec = self.fx.write_spec(
+            toml_mutant("typo", None, "text = text.lower()", "text = ("),
+            top=f'[stage]\nfile = "{hook}"\nenv = "HOOK_PATH"\n')
+        use_suites(spec, "tests.test_hook")
+        code, out, _ = run_main(str(spec))
+        self.assertEqual(code, mutcheck.EXIT_UNPINNED, out)
+        self.assertRegex(out, r"typo\s+BROKEN\s+mutant does not compile: .*\(deployed_hook")
+
+    def test_a_data_file_is_not_judged_as_python(self):
+        (self.fx.root / "fixture.json").write_text('{"a": 1}\n')
+        spec = self.fx.write_spec(("json", "fixture.json", '{"a": 1}', '{"a": 1'))
+        code, out, _ = run_main(str(spec))
+        self.assertEqual(code, mutcheck.EXIT_UNPINNED, out)
+        self.assertRegex(out, r"json\s+SURVIVED")
+
+    def test_a_refusal_is_confirmed_with_the_runs_own_interpreter(self):
+        accepts = self.fx.root / "accepts"
+        accepts.write_text("#!/bin/sh\nexit 0\n")
+        accepts.chmod(0o755)
+        refuses = self.fx.root / "refuses"
+        refuses.write_text("#!/bin/sh\nexit 1\n")
+        refuses.chmod(0o755)
+        self.assertIsNone(mutcheck._compile_error("m.py", "x = 1\n", "x = (\n", str(accepts)))
+        self.assertIn("does not compile",
+                      mutcheck._compile_error("m.py", "x = 1\n", "x = (\n", str(refuses)))
+
+
+class LineEndingTest(MutcheckCase):
+    def apply(self, find, replace, text):
+        written = {}
+        reason = mutcheck.apply_edits((mutcheck.Edit("f.py", find, replace),),
+                                      lambda _f: text, written.__setitem__)
+        return reason, written.get("f.py")
+
+    def test_an_anchor_starting_with_a_newline_is_applied_in_crlf(self):
+        reason, written = self.apply("\nb", "\nX\nb", "a\r\nb\r\nc\r\n")
+        self.assertIsNone(reason)
+        self.assertEqual(written, "a\r\nX\r\nb\r\nc\r\n")
+
+    def test_mixed_line_endings_are_named_as_the_reason(self):
+        reason, written = self.apply("a\nb\nc", "x", "a\nb\r\nc\r\n")
+        self.assertIn("only with line endings normalised", reason)
+        self.assertIn("mixes CRLF and LF", reason)
+        self.assertIsNone(written)
+
+
+class ExclusionMessageTest(MutcheckCase):
+    def test_a_target_the_copy_left_out_says_so(self):
+        (self.fx.root / "vendor").mkdir()
+        (self.fx.root / "vendor" / "mod.py").write_text("X = 1\n")
+        os.symlink("vendor/mod.py", self.fx.root / "alias.py")
+        spec = self.fx.write_spec(("aliased", "alias.py", "X = 1", "X = 2"),
+                                  run_extra='ignore = ["vendor"]')
+        code, out, _ = run_main(str(spec))
+        self.assertEqual(code, mutcheck.EXIT_UNPINNED, out)
+        self.assertRegex(out, r"aliased\s+STALE\s+alias.py is in the project but not in "
+                              r"the sandbox")
+
+
+class SpecLinkTest(MutcheckCase):
+    def test_a_spec_symlinked_into_the_project_is_not_a_link_out_of_it(self):
+        elsewhere = Path(self._tmp.name) / "specs"
+        elsewhere.mkdir()
+        real = elsewhere / "spec.toml"
+        real.write_text('[run]\nsuites = ["tests.test_slugify"]\n' + toml_mutant(*MUTANT_LOWER))
+        link = self.fx.root / "linked.toml"
+        os.symlink(real, link)
+        code, out, err = run_main(str(link))
+        self.assertEqual(code, mutcheck.EXIT_PINNED, out + err)
+
+    def test_a_nested_link_out_of_the_project_is_refused(self):
+        outside = Path(self._tmp.name) / "outside"
+        outside.mkdir()
+        (self.fx.root / "tests" / "fixtures").mkdir()
+        os.symlink(outside, self.fx.root / "tests" / "fixtures" / "data")
+        spec = self.fx.write_spec(MUTANT_LOWER)
+        code, out, err = run_main(str(spec))
+        self.assertEqual(code, mutcheck.EXIT_UNUSABLE, out)
+        self.assertIn("tests/fixtures/data ->", err)
+
+
+class LeakAccountingTest(MutcheckCase):
+    def test_a_sandbox_that_cannot_be_removed_is_counted_in_the_summary(self):
+        controlled = Path(self._tmp.name) / "tmproot"
+        controlled.mkdir()
+        spec = self.fx.write_spec(MUTANT_LOWER)
+        with mock.patch.object(tempfile, "tempdir", str(controlled)):
+            with mock.patch.object(mutcheck.shutil, "rmtree", side_effect=OSError("busy")):
+                code, out, err = run_main(str(spec))
+        self.assertEqual(code, mutcheck.EXIT_PINNED, out)
+        self.assertIn("2 sandbox(es) could not be removed", out)
+        self.assertIn("could not remove sandbox", err)
+        self.assertEqual(len(sorted(controlled.glob("mutcheck-*"))), 2)
+        shutil.rmtree(controlled, ignore_errors=True)
+
+
+class BytecodeTest(MutcheckCase):
+    def test_no_bytecode_lands_in_the_sandbox_under_a_custom_command(self):
+        # No -B here, so only PYTHONDONTWRITEBYTECODE in the run's env stops it.
+        spec = self.fx.write_spec(MUTANT_LOWER, run_extra=(
+            f'command = ["{sys.executable}", "-m", "unittest", "tests.test_slugify"]'))
+        spec.write_text(spec.read_text().replace(
+            'suites = ["tests.test_slugify"]\n', "", 1))
+        # A nested run inherits the flag from the run around it, which would
+        # hide the very setting under test.
+        with mock.patch.dict(os.environ):
+            os.environ.pop("PYTHONDONTWRITEBYTECODE", None)
+            code, out, _ = run_main(str(spec), "--keep", "--json")
+        report = json.loads(out)
+        kept = [report["control"]["sandbox"]] + [m["sandbox"] for m in report["mutants"]]
+        try:
+            self.assertEqual(code, mutcheck.EXIT_PINNED, out)
+            for path in kept:
+                self.assertEqual(list(Path(path).rglob("__pycache__")), [], path)
+        finally:
+            for path in kept:
+                shutil.rmtree(path, ignore_errors=True)
+
+
+class TimeoutGroupTest(MutcheckCase):
+    def test_a_timeout_kills_the_whole_group_of_a_wrapped_suite(self):
+        pids = Path(self._tmp.name) / "pids"
+        add_suite(self.fx.root, "test_hang", '''\
+            import os, subprocess, sys, time, unittest
+
+            class HangTest(unittest.TestCase):
+                def test_hangs(self):
+                    helper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+                    with open(os.environ["HELPER_PID_FILE"], "a") as handle:
+                        handle.write(f"{helper.pid}\\n")
+                    time.sleep(60)
+            ''')
+        wrapped = f"{sys.executable} -B -m unittest tests.test_hang; true"
+        spec = self.fx.write_spec(MUTANT_LOWER, run_extra=(
+            f'timeout = 3\ncommand = ["sh", "-c", "{wrapped}"]'))
+        spec.write_text(spec.read_text().replace(
+            'suites = ["tests.test_slugify"]\n', "", 1))
+        with mock.patch.dict(os.environ, {"HELPER_PID_FILE": str(pids)}):
+            code, out, _ = run_main(str(spec))
+        self.assertEqual(code, mutcheck.EXIT_UNUSABLE, out)
+        self.assertIn("timed out after 3s", out)
+        alive = []
+        for pid in (int(line) for line in pids.read_text().split()):
+            for _ in range(50):
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.1)
+            else:
+                alive.append(pid)
+                os.kill(pid, 9)
+        self.assertEqual(alive, [])
+
+
+class PythonPathTest(MutcheckCase):
+    def test_a_project_subdirectory_on_pythonpath_is_remapped_into_the_copy(self):
+        src = self.fx.root / "src"
+        src.mkdir()
+        (src / "pkg.py").write_text(SLUGIFY)
+        add_suite(self.fx.root, "test_pkg", '''\
+            import unittest
+            from pkg import slugify
+
+            class PkgTest(unittest.TestCase):
+                def test_lower(self):
+                    self.assertEqual(slugify("Hello"), "hello")
+            ''')
+        spec = self.fx.write_spec(("lower", "src/pkg.py", "text = text.lower()", "text = text"))
+        use_suites(spec, "tests.test_pkg")
+        with mock.patch.dict(os.environ, {"PYTHONPATH": str(src)}):
+            code, out, err = run_main(str(spec))
+        self.assertEqual(code, mutcheck.EXIT_PINNED, out + err)
+        self.assertRegex(out, r"lower\s+caught")
+
+
+class StagingErrorTest(MutcheckCase):
+    def test_a_stage_path_that_cannot_be_created_exits_two(self):
+        hook = Path(self._tmp.name) / "hook.py"
+        hook.write_text(SLUGIFY)
+        spec = self.fx.write_spec(
+            toml_mutant("lower", None, "text = text.lower()", "text = text"),
+            top=f'[stage]\nfile = "{hook}"\nenv = "HOOK_PATH"\nas = "{"x" * 300}/hook.py"\n')
+        code, out, err = run_main(str(spec))
+        self.assertEqual(code, mutcheck.EXIT_UNUSABLE, out)
+        self.assertIn("cannot stage hook.py", err)
+
+
+class RunnerDetectionTest(MutcheckCase):
+    def test_a_command_with_unittest_in_its_path_is_not_treated_as_unittest(self):
+        (self.fx.root / "check_unittest_compat.py").write_text(
+            "import sys\nfrom slugify import slugify\n"
+            "sys.exit(0 if slugify('Hello') == 'hello' else 1)\n")
+        spec = self.fx.write_spec(MUTANT_LOWER, run_extra=(
+            f'command = ["{sys.executable}", "check_unittest_compat.py"]'))
+        spec.write_text(spec.read_text().replace(
+            'suites = ["tests.test_slugify"]\n', "", 1))
+        code, out, _ = run_main(str(spec))
+        self.assertEqual(code, mutcheck.EXIT_PINNED, out)
+        self.assertRegex(out, r"lowercase_dropped\s+caught")
+
+    def test_load_failure_text_a_test_prints_is_not_a_load_failure(self):
+        add_suite(self.fx.root, "test_printer", '''\
+            import sys, unittest
+            from slugify import slugify
+
+            class PrinterTest(unittest.TestCase):
+                def test_lower(self):
+                    sys.stderr.write("ERROR: t (unittest.loader._FailedTest.t)\\n")
+                    self.assertEqual(slugify("Hello"), "hello")
+            ''')
+        spec = self.fx.write_spec(MUTANT_LOWER)
+        use_suites(spec, "tests.test_printer")
+        code, out, err = run_main(str(spec))
+        self.assertEqual(code, mutcheck.EXIT_PINNED, out + err)
+        self.assertRegex(out, r"control\s+green")
+        self.assertRegex(out, r"lowercase_dropped\s+caught")
