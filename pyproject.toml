@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mutcheck"
+name = "mutt_check"
 dynamic = ["version"]
 description = "Prove a test suite catches the defects it claims to pin: curated mutants, a mandatory control run, and a STALE verdict."
 readme = "README.md"
@@ -25,11 +25,11 @@ classifiers = [
 dependencies = []
 
 [project.scripts]
-mutcheck = "mutcheck:main"
+mutt_check = "mutt_check:main"
 
 [tool.setuptools]
-py-modules = ["mutcheck"]
+py-modules = ["mutt_check"]
 
-# One version, in mutcheck.__version__.
+# One version, in mutt_check.__version__.
 [tool.setuptools.dynamic]
-version = { attr = "mutcheck.__version__" }
+version = { attr = "mutt_check.__version__" }

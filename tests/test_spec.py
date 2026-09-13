@@ -1,4 +1,4 @@
-"""Tests for how mutcheck reads a spec: what it accepts and what it refuses.
+"""Tests for how mutt_check reads a spec: what it accepts and what it refuses.
 
 Everything here is decided at load time, before any sandbox exists, so a
 mistake in the spec is a one-line error with exit 2 rather than a run that
@@ -12,8 +12,8 @@ import re
 import textwrap
 from pathlib import Path
 
-import mutcheck
-from tests.test_mutcheck import MUTANT_LOWER, SLUGIFY, MutcheckCase, run_main, toml_mutant
+import mutt_check
+from tests.test_mutt_check import MUTANT_LOWER, SLUGIFY, MutcheckCase, run_main, toml_mutant
 
 RUN = '[run]\nsuites = ["tests.test_slugify"]\n'
 MUTANT_STRIP = ("strip_dropped", "slugify.py", 'return text.strip("-")', "return text")
@@ -22,8 +22,8 @@ MUTANT_STRIP = ("strip_dropped", "slugify.py", 'return text.strip("-")', "return
 class SpecCase(MutcheckCase):
     def assert_rejected(self, pattern: str, spec_text: str) -> None:
         self.fx.spec_path.write_text(spec_text)
-        with self.assertRaisesRegex(mutcheck.SpecError, pattern):
-            mutcheck.load_spec(self.fx.spec_path)
+        with self.assertRaisesRegex(mutt_check.SpecError, pattern):
+            mutt_check.load_spec(self.fx.spec_path)
 
     def external_hook(self) -> Path:
         hook = Path(self._tmp.name) / "deployed" / "hook.py"
@@ -70,24 +70,24 @@ class UnknownKeyTest(SpecCase):
 class SpecLoadTest(SpecCase):
     def test_spec_path_that_is_a_directory_exits_two(self):
         code, out, err = run_main(str(self.fx.root))
-        self.assertEqual(code, mutcheck.EXIT_UNUSABLE)
+        self.assertEqual(code, mutt_check.EXIT_UNUSABLE)
         self.assertIn("cannot read spec", err)
         self.assertEqual(out, "")
 
     def test_spec_that_is_not_utf8_exits_two(self):
         self.fx.spec_path.write_bytes(b"[run]\nsuites = ['\xff']\n")
         code, _, err = run_main(str(self.fx.spec_path))
-        self.assertEqual(code, mutcheck.EXIT_UNUSABLE)
+        self.assertEqual(code, mutt_check.EXIT_UNUSABLE)
         self.assertIn("cannot read spec", err)
 
     def test_symlinked_spec_keeps_the_directory_it_was_named_in(self):
         elsewhere = Path(self._tmp.name) / "specs"
         elsewhere.mkdir()
-        real = elsewhere / "mutcheck.toml"
+        real = elsewhere / "mutt_check.toml"
         real.write_text(RUN + toml_mutant(*MUTANT_LOWER))
         link = self.fx.root / "linked.toml"
         os.symlink(real, link)
-        self.assertEqual(mutcheck.load_spec(link).root, self.fx.root.resolve())
+        self.assertEqual(mutt_check.load_spec(link).root, self.fx.root.resolve())
 
     def test_mutant_with_no_edit_says_so(self):
         self.assert_rejected("needs file/find/replace", RUN + '[[mutant]]\nname = "m"\n')
@@ -101,7 +101,7 @@ class SpecLoadTest(SpecCase):
     def test_edit_paths_are_normalised(self):
         self.fx.spec_path.write_text(
             RUN + toml_mutant("m", "./slugify.py", "text = text.lower()", "text = text"))
-        edit = mutcheck.load_spec(self.fx.spec_path).mutants[0].edits[0]
+        edit = mutt_check.load_spec(self.fx.spec_path).mutants[0].edits[0]
         self.assertEqual(edit.file, "slugify.py")
 
     def test_file_naming_a_directory_is_rejected(self):
@@ -181,8 +181,8 @@ class StageSpecTest(SpecCase):
         hook = self.external_hook()
         self.fx.spec_path.write_text(self.stage_spec(hook).replace(
             'env = "HOOK_PATH"', 'env = "HOME=x"'))
-        with self.assertRaisesRegex(mutcheck.SpecError, "not a variable name"):
-            mutcheck.load_spec(self.fx.spec_path)
+        with self.assertRaisesRegex(mutt_check.SpecError, "not a variable name"):
+            mutt_check.load_spec(self.fx.spec_path)
 
     def test_missing_stage_file_is_rejected(self):
         self.assert_rejected("does not exist",
@@ -207,9 +207,9 @@ class StageSpecTest(SpecCase):
             '''))
         self.fx.spec_path.write_text(self.stage_spec(hook).replace(
             "tests.test_slugify", "tests.test_hook"))
-        loaded = mutcheck.load_spec(self.fx.spec_path)
+        loaded = mutt_check.load_spec(self.fx.spec_path)
         hook.write_text("this is no longer python (\n")
-        report = mutcheck.check(loaded)
+        report = mutt_check.check(loaded)
         self.assertEqual(report.control.outcome, "green", report.control.detail)
         self.assertEqual(report.mutants[0].outcome, "caught")
 
@@ -218,14 +218,14 @@ class ListOnlyTest(SpecCase):
     def test_list_with_only_lists_just_those(self):
         spec = self.fx.write_spec(MUTANT_LOWER, MUTANT_STRIP)
         code, out, _ = run_main(str(spec), "--list", "--only", "strip_dropped")
-        self.assertEqual(code, mutcheck.EXIT_PINNED)
+        self.assertEqual(code, mutt_check.EXIT_PINNED)
         self.assertIn("strip_dropped", out)
         self.assertNotIn("lowercase_dropped", out)
 
     def test_list_with_an_unknown_only_name_exits_two(self):
         spec = self.fx.write_spec(MUTANT_LOWER)
         code, out, err = run_main(str(spec), "--list", "--only", "nope")
-        self.assertEqual(code, mutcheck.EXIT_UNUSABLE)
+        self.assertEqual(code, mutt_check.EXIT_UNUSABLE)
         self.assertIn("no such mutant: nope", err)
         self.assertEqual(out, "")
 
@@ -262,16 +262,16 @@ class TableShapeTest(SpecCase):
                              RUN + '[[mutant]]\nname = "m"\nedit = [1]\n')
 
     def test_root_that_is_not_a_directory(self):
-        with self.assertRaisesRegex(mutcheck.SpecError, "project root is not a directory"):
-            mutcheck.parse_spec(self.raw(), self.fx.root / "slugify.py")
+        with self.assertRaisesRegex(mutt_check.SpecError, "project root is not a directory"):
+            mutt_check.parse_spec(self.raw(), self.fx.root / "slugify.py")
 
     def test_python_that_is_not_a_string(self):
-        with self.assertRaisesRegex(mutcheck.SpecError, "python must be a non-empty string"):
-            mutcheck.parse_spec(self.raw(python=3), self.fx.root)
+        with self.assertRaisesRegex(mutt_check.SpecError, "python must be a non-empty string"):
+            mutt_check.parse_spec(self.raw(python=3), self.fx.root)
 
     def test_env_with_a_null_byte_is_rejected(self):
         hook = self.external_hook()
         raw = self.raw()
         raw["stage"] = {"file": str(hook), "env": "HOOK\0PATH"}
-        with self.assertRaisesRegex(mutcheck.SpecError, "not a variable name"):
-            mutcheck.parse_spec(raw, self.fx.root)
+        with self.assertRaisesRegex(mutt_check.SpecError, "not a variable name"):
+            mutt_check.parse_spec(raw, self.fx.root)

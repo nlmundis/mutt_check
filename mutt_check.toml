@@ -1,4 +1,4 @@
-# mutcheck run against itself. Every entry reverts one of the tool's own
+# mutt_check run against itself. Every entry reverts one of the tool's own
 # load-bearing decisions and names the reason the decision exists. `suites`
 # names the test class that pins it, so the spec doubles as a map from each
 # decision to its test. `make check` runs this after the unit suite.
@@ -7,7 +7,7 @@
 # survivor in the dogfood spec would be a to-do dressed as evidence.
 
 [run]
-suites = ["tests.test_mutcheck", "tests.test_spec", "tests.test_sandbox",
+suites = ["tests.test_mutt_check", "tests.test_spec", "tests.test_sandbox",
           "tests.test_repo"]
 timeout = 300
 
@@ -16,8 +16,8 @@ timeout = 300
 [[mutant]]
 name = "anchor_matched_on_first_occurrence"
 why = "An anchor must appear exactly once. First-match is one refactor from retargeting silently."
-suites = ["tests.test_mutcheck.VerdictTest"]
-file = "mutcheck.py"
+suites = ["tests.test_mutt_check.VerdictTest"]
+file = "mutt_check.py"
 find = "        if count != 1:"
 replace = "        if count < 1:"
 
@@ -25,15 +25,15 @@ replace = "        if count < 1:"
 name = "overlapping_occurrences_missed"
 why = "str.count skips overlaps, so an ambiguous anchor like '--' in '---' would pass as unique."
 suites = ["tests.test_sandbox.EditSemanticsTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = "        at = text.find(find, at + 1)"
 replace = "        at = text.find(find, at + len(find))"
 
 [[mutant]]
 name = "red_control_does_not_stop_the_run"
 why = "A red control makes every mutant look caught, including a no-op."
-suites = ["tests.test_mutcheck.VerdictTest"]
-file = "mutcheck.py"
+suites = ["tests.test_mutt_check.VerdictTest"]
+file = "mutt_check.py"
 find = '''    if control.outcome != "green":
         return report'''
 replace = '''    if False:
@@ -42,16 +42,16 @@ replace = '''    if False:
 [[mutant]]
 name = "stale_counted_as_pinned"
 why = "A stale mutant tested nothing; exit 0 would report that as success."
-suites = ["tests.test_mutcheck.VerdictTest"]
-file = "mutcheck.py"
+suites = ["tests.test_mutt_check.VerdictTest"]
+file = "mutt_check.py"
 find = "        if self.survived or self.stale or self.broken:"
 replace = "        if self.survived or self.broken:"
 
 [[mutant]]
 name = "skipped_tests_ignored_by_default"
 why = "A skipped test can catch nothing, so a skipping control is weaker than it looks."
-suites = ["tests.test_mutcheck.VerdictTest"]
-file = "mutcheck.py"
+suites = ["tests.test_mutt_check.VerdictTest"]
+file = "mutt_check.py"
 find = "    if skipped and not spec.allow_skips:"
 replace = "    if False:"
 
@@ -59,7 +59,7 @@ replace = "    if False:"
 name = "first_ran_line_trusted"
 why = "unittest's own summary is the last 'Ran N tests' line; one a test printed must not decide the run."
 suites = ["tests.test_sandbox.BrokenTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = '''    last = None
     for last in _RAN_RE.finditer(text):
         pass
@@ -69,8 +69,8 @@ replace = "    return _RAN_RE.search(text)"
 [[mutant]]
 name = "summary_quotes_selected_not_applied"
 why = "The closing line is what gets quoted; it must count what this run did."
-suites = ["tests.test_mutcheck.CliTest"]
-file = "mutcheck.py"
+suites = ["tests.test_mutt_check.CliTest"]
+file = "mutt_check.py"
 find = '        line = (f"{self.applied} of {self.selected} mutants applied, control "'
 replace = '        line = (f"{self.selected} of {self.selected} mutants applied, control "'
 
@@ -80,7 +80,7 @@ replace = '        line = (f"{self.selected} of {self.selected} mutants applied,
 name = "compile_check_skipped"
 why = "A mutant that does not compile is BROKEN however the suite loads the file, including inside a test body."
 suites = ["tests.test_sandbox.BrokenTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = "        broken = _compile_error(file, originals[file], text, spec.python)"
 replace = "        broken = None"
 
@@ -88,7 +88,7 @@ replace = "        broken = None"
 name = "compile_check_judges_syntax_this_interpreter_lacks"
 why = "A file this interpreter cannot compile even unmutated must not make every mutant BROKEN."
 suites = ["tests.test_sandbox.BrokenTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = '''    try:
         compile(before, name, "exec", dont_inherit=True)
     except (SyntaxError, ValueError):
@@ -99,16 +99,16 @@ replace = ""
 [[mutant]]
 name = "runner_crash_reported_as_caught"
 why = "Given module names, unittest lets an exception other than ImportError escape at import, with no summary; that red run is not a catch."
-suites = ["tests.test_mutcheck.SafetyTest"]
-file = "mutcheck.py"
+suites = ["tests.test_mutt_check.SafetyTest"]
+file = "mutt_check.py"
 find = "    if ran_count is None and returncode != 0 and _UNITTEST_FRAME_RE.search(text):"
 replace = "    if False:"
 
 [[mutant]]
 name = "discovery_import_failure_reported_as_caught"
 why = "unittest wraps a test module that failed with an ImportError in a synthetic _FailedTest and carries on."
-suites = ["tests.test_mutcheck.SafetyTest"]
-file = "mutcheck.py"
+suites = ["tests.test_mutt_check.SafetyTest"]
+file = "mutt_check.py"
 find = "    if returncode != 0 and start != -1 and _SEPARATOR in text[:start]:"
 replace = "    if False:"
 
@@ -116,7 +116,7 @@ replace = "    if False:"
 name = "any_red_run_without_a_summary_is_broken"
 why = "Only unittest leaves its own frames in the traceback; another runner's red run is a catch, not a load failure."
 suites = ["tests.test_sandbox.RunnerDetectionTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = "returncode != 0 and _UNITTEST_FRAME_RE.search(text)"
 replace = "returncode != 0"
 
@@ -125,8 +125,8 @@ replace = "returncode != 0"
 [[mutant]]
 name = "noop_mutant_accepted"
 why = "find == replace is a mutant that changes nothing and would always survive."
-suites = ["tests.test_mutcheck.SpecValidationTest"]
-file = "mutcheck.py"
+suites = ["tests.test_mutt_check.SpecValidationTest"]
+file = "mutt_check.py"
 find = "    if find == replace:"
 replace = "    if False:"
 
@@ -134,15 +134,15 @@ replace = "    if False:"
 name = "unknown_keys_accepted"
 why = "A misspelled key silently dropped changes the run without a word."
 suites = ["tests.test_spec.UnknownKeyTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = "    extra = sorted(set(table) - known)"
 replace = "    extra = []"
 
 [[mutant]]
 name = "missing_interpreter_accepted"
 why = "An interpreter that cannot start is a spec error, not a traceback."
-suites = ["tests.test_mutcheck.SpecValidationTest"]
-file = "mutcheck.py"
+suites = ["tests.test_mutt_check.SpecValidationTest"]
+file = "mutt_check.py"
 find = "    if shutil.which(python) is None:"
 replace = "    if False:"
 
@@ -150,7 +150,7 @@ replace = "    if False:"
 name = "edit_paths_not_normalised"
 why = "'./a.py' and 'a.py' are one file; two spellings must not become two independent edits."
 suites = ["tests.test_spec.SpecLoadTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = "    return Edit(file=Path(os.path.normpath(file)).as_posix(), find=find,"
 replace = "    return Edit(file=file, find=find,"
 
@@ -158,7 +158,7 @@ replace = "    return Edit(file=file, find=find,"
 name = "spec_root_follows_a_symlinked_spec"
 why = "The root is the directory the spec was named in, not wherever a link to it points."
 suites = ["tests.test_spec.SpecLoadTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = "(root or path.absolute().parent).resolve()"
 replace = "(root or path.resolve().parent).resolve()"
 
@@ -166,7 +166,7 @@ replace = "(root or path.resolve().parent).resolve()"
 name = "ignored_edit_target_accepted"
 why = "An edit the sandbox copy would leave out must fail at load, not as an unexplained STALE."
 suites = ["tests.test_spec.IgnoreRuleTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = "                    if fnmatch.fnmatch(part, pattern):"
 replace = "                    if False:"
 
@@ -174,7 +174,7 @@ replace = "                    if False:"
 name = "stage_as_may_escape_the_temp_directory"
 why = "A `..` in `as` would stage the mutated file outside the temp directory."
 suites = ["tests.test_spec.StageSpecTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = '''                                or ".." in Path(as_path).parts
                                 or as_path.endswith(("/", os.sep))'''
 replace = '''                                or as_path.endswith(("/", os.sep))'''
@@ -183,23 +183,23 @@ replace = '''                                or as_path.endswith(("/", os.sep))'
 name = "stage_file_reread_for_each_run"
 why = "The control and every mutant must judge the same staged content, even if the real file changes."
 suites = ["tests.test_spec.StageSpecTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = "        _write_text(staged, stage.source)"
 replace = '        _write_text(staged, stage.file.read_text(encoding="utf-8"))'
 
 [[mutant]]
 name = "only_filter_ignored"
 why = "--only exists to re-run one survivor fast."
-suites = ["tests.test_mutcheck.CliTest", "tests.test_spec.ListOnlyTest"]
-file = "mutcheck.py"
+suites = ["tests.test_mutt_check.CliTest", "tests.test_spec.ListOnlyTest"]
+file = "mutt_check.py"
 find = "    return [m for m in spec.mutants if not only or m.name in only]"
 replace = "    return list(spec.mutants)"
 
 [[mutant]]
 name = "unknown_only_name_silently_accepted"
 why = "A typo in --only must not turn into a run that checked nothing."
-suites = ["tests.test_mutcheck.CliTest", "tests.test_spec.ListOnlyTest"]
-file = "mutcheck.py"
+suites = ["tests.test_mutt_check.CliTest", "tests.test_spec.ListOnlyTest"]
+file = "mutt_check.py"
 find = '''    if unknown:
         raise SpecError'''
 replace = '''    if False:
@@ -210,8 +210,8 @@ replace = '''    if False:
 [[mutant]]
 name = "edits_written_before_every_anchor_is_checked"
 why = "A mutant with one stale edit must apply none of them."
-suites = ["tests.test_mutcheck.EditTest"]
-file = "mutcheck.py"
+suites = ["tests.test_mutt_check.EditTest"]
+file = "mutt_check.py"
 find = '''        texts[edit.file] = text.replace(find, replace, 1)
     for file, text in texts.items():
         write(file, text)'''
@@ -222,31 +222,31 @@ replace = '''        texts[edit.file] = text.replace(find, replace, 1)
 name = "crlf_anchor_not_adapted"
 why = "TOML carries LF; a multi-line anchor must still match a CRLF file, in that file's own endings."
 suites = ["tests.test_sandbox.EditSemanticsTest", "tests.test_sandbox.LineEndingTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = '''        if "\n" in find and "\r\n" in text and _occurrences(text, _crlf(find)) == 1:'''
 replace = "        if False:"
 
 [[mutant]]
 name = "line_endings_normalised_on_read"
 why = "The sandbox must differ from the project by the mutant alone, not by newlines."
-suites = ["tests.test_mutcheck.SafetyTest"]
-file = "mutcheck.py"
+suites = ["tests.test_mutt_check.SafetyTest"]
+file = "mutt_check.py"
 find = '''        with path.open(encoding="utf-8", newline="") as handle:'''
 replace = '''        with path.open(encoding="utf-8") as handle:'''
 
 [[mutant]]
 name = "git_dir_copied_into_the_sandbox"
 why = "The sandbox must never carry the repository's history by default."
-suites = ["tests.test_mutcheck.VerdictTest"]
-file = "mutcheck.py"
+suites = ["tests.test_mutt_check.VerdictTest"]
+file = "mutt_check.py"
 find = '    ".git", ".hg", ".svn", "__pycache__",'
 replace = '    ".hg", ".svn", "__pycache__",'
 
 [[mutant]]
 name = "escaping_symlinks_allowed"
 why = "A link out of the project lets the suite write through it and import the real, unmutated code."
-suites = ["tests.test_mutcheck.SafetyTest", "tests.test_sandbox.IsolationTest"]
-file = "mutcheck.py"
+suites = ["tests.test_mutt_check.SafetyTest", "tests.test_sandbox.IsolationTest"]
+file = "mutt_check.py"
 find = "    if escaping:"
 replace = "    if False:"
 
@@ -254,7 +254,7 @@ replace = "    if False:"
 name = "symlink_written_through"
 why = "Defence in depth: even a link the copy check missed must never be written through."
 suites = ["tests.test_sandbox.IsolationTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = "        if not resolved.is_relative_to(inside):"
 replace = "        if False:"
 
@@ -262,7 +262,7 @@ replace = "        if False:"
 name = "temp_dir_inside_project_allowed"
 why = "A TMPDIR under the project makes the copy walk into its own sandbox."
 suites = ["tests.test_sandbox.IsolationTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = """    if not temp.is_relative_to(root):
         return"""
 replace = """    if True:
@@ -272,7 +272,7 @@ replace = """    if True:
 name = "copy_not_first_on_pythonpath"
 why = "Under PYTHONSAFEPATH, or with the real tree on PYTHONPATH, the suite would import the unmutated code."
 suites = ["tests.test_sandbox.IsolationTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = '        env["PYTHONPATH"] = _sandbox_pythonpath(work, spec.root, env.get("PYTHONPATH", ""))'
 replace = "        pass"
 
@@ -280,7 +280,7 @@ replace = "        pass"
 name = "readonly_target_not_made_writable"
 why = "The copy keeps a read-only file read-only; the mutant must still land in the disposable copy."
 suites = ["tests.test_sandbox.IsolationTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = "        if not mode & stat.S_IWUSR:"
 replace = "        if False:"
 
@@ -288,15 +288,15 @@ replace = "        if False:"
 name = "readonly_directories_block_removal"
 why = "A read-only directory in the copy would leak a sandbox on every run."
 suites = ["tests.test_sandbox.IsolationTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = "                    path.chmod(path.stat().st_mode | stat.S_IRWXU)"
 replace = "                    pass"
 
 [[mutant]]
 name = "stage_env_names_the_root_without_as"
 why = "Without `as`, the env var must point at the staged file itself."
-suites = ["tests.test_mutcheck.StageTest"]
-file = "mutcheck.py"
+suites = ["tests.test_mutt_check.StageTest"]
+file = "mutt_check.py"
 find = "        env[stage.env] = str(tmp if stage.as_path else staged)"
 replace = "        env[stage.env] = str(tmp)"
 
@@ -304,7 +304,7 @@ replace = "        env[stage.env] = str(tmp)"
 name = "only_the_suite_is_killed"
 why = "Processes the suite started must not outlive the run and the sandbox they were using."
 suites = ["tests.test_sandbox.ProcessTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = "        os.killpg(proc.pid, signal.SIGKILL)"
 replace = "        proc.kill()"
 
@@ -314,7 +314,7 @@ replace = "        proc.kill()"
 name = "control_skips_the_suites_only_a_mutant_names"
 why = "A mutant judged against a suite the control never ran can be caught by a suite that was already red."
 suites = ["tests.test_sandbox.ControlCoverageTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = """    for mutant in mutants:
         for suite in mutant.suites or ():"""
 replace = """    for mutant in ():
@@ -324,7 +324,7 @@ replace = """    for mutant in ():
 name = "compile_check_gated_on_a_suffix"
 why = "A deployed hook has no .py suffix, and the [stage] section of the README is built around one."
 suites = ["tests.test_sandbox.CompileGuardTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = "    return not Path(name).suffix"
 replace = "    return False"
 
@@ -332,15 +332,15 @@ replace = "    return False"
 name = "byte_order_mark_disables_the_compile_check"
 why = "compile() rejects U+FEFF, so a BOM would make every mutant on that file look like unsupported syntax."
 suites = ["tests.test_sandbox.CompileGuardTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = '    before, after = before.lstrip("\ufeff"), after.lstrip("\ufeff")'
 replace = "    pass"
 
 [[mutant]]
 name = "refusal_not_confirmed_with_the_runs_own_python"
-why = "The suite may run under an interpreter that accepts syntax the one running mutcheck does not."
+why = "The suite may run under an interpreter that accepts syntax the one running mutt_check does not."
 suites = ["tests.test_sandbox.CompileGuardTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = """        if _compiles_with(python, after):
             return None
         return f"mutant does not compile: {exc.msg} ({name}, line {exc.lineno})""""
@@ -350,7 +350,7 @@ replace = '        return f"mutant does not compile: {exc.msg} ({name}, line {ex
 name = "the_specs_own_link_counted_as_escaping"
 why = "A spec symlinked into the tree it exercises is a supported layout, so that link must not refuse the run."
 suites = ["tests.test_sandbox.SpecLinkTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = "            if not path.is_symlink() or str(path.relative_to(work)) in skip:"
 replace = "            if not path.is_symlink():"
 
@@ -358,7 +358,7 @@ replace = "            if not path.is_symlink():"
 name = "escaping_links_looked_for_only_at_the_top_level"
 why = "A nested link out of the project breaks isolation exactly as a top-level one does."
 suites = ["tests.test_sandbox.SpecLinkTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = "    for dirpath, dirnames, filenames in os.walk(work):\n        for name in dirnames + filenames:\n            path = Path(dirpath) / name\n            if not path.is_symlink()"
 replace = "    for dirpath, dirnames, filenames in [next(os.walk(work))]:\n        for name in dirnames + filenames:\n            path = Path(dirpath) / name\n            if not path.is_symlink()"
 
@@ -366,7 +366,7 @@ replace = "    for dirpath, dirnames, filenames in [next(os.walk(work))]:\n     
 name = "excluded_target_reported_as_unreadable"
 why = "A file that is plainly in the project must not be reported as unreadable when an ignore pattern dropped it."
 suites = ["tests.test_sandbox.ExclusionMessageTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = "            if root is not None and (root / file).exists():"
 replace = "            if False:"
 
@@ -374,7 +374,7 @@ replace = "            if False:"
 name = "staging_failure_escapes_as_a_traceback"
 why = "A sandbox that cannot be built is an infrastructure fault with exit 2, not exit 1, which means a mutant survived."
 suites = ["tests.test_sandbox.StagingErrorTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = """        except (OSError, ValueError) as exc:
             raise RunError(f"cannot stage {stage.file.name} at {staged}: {exc}")"""
 replace = """        except (OSError, ValueError):
@@ -384,7 +384,7 @@ replace = """        except (OSError, ValueError):
 name = "leaked_sandboxes_not_counted"
 why = "Leaks reported only on stderr pile up unnoticed in CI; the summary line is what gets read."
 suites = ["tests.test_sandbox.LeakAccountingTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = "        return sum(1 for v in [self.control, *self.mutants] if v.leaked)"
 replace = "        return 0"
 
@@ -392,7 +392,7 @@ replace = "        return 0"
 name = "bytecode_allowed_into_the_sandbox"
 why = "A custom command is not invoked with -B, so only the environment stops bytecode landing in the copy."
 suites = ["tests.test_sandbox.BytecodeTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = '    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")'
 replace = "    env = dict(os.environ)"
 
@@ -400,7 +400,7 @@ replace = "    env = dict(os.environ)"
 name = "python_alongside_command_accepted"
 why = "A command names its own interpreter, so a [run] python beside it is a setting that does nothing."
 suites = ["tests.test_spec.CommandAndPythonTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = '    if command and "python" in run:'
 replace = "    if False:"
 
@@ -408,7 +408,7 @@ replace = "    if False:"
 name = "stage_table_shape_unchecked"
 why = "Without the check an invalid spec is a traceback with exit 1, which reads as a mutant that survived."
 suites = ["tests.test_spec.TableShapeTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = """    if not isinstance(raw, dict):
         raise SpecError("[stage] must be a table")"""
 replace = """    if False:
@@ -418,7 +418,7 @@ replace = """    if False:
 name = "project_root_not_checked_to_be_a_directory"
 why = "A root that is a file fails much later, as a copy error about the sandbox."
 suites = ["tests.test_spec.TableShapeTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = "    if not root.is_dir():"
 replace = "    if False:"
 
@@ -426,7 +426,7 @@ replace = "    if False:"
 name = "python_type_unchecked"
 why = "A non-string python reaches the path handling and raises TypeError instead of a spec error."
 suites = ["tests.test_spec.TableShapeTest"]
-file = "mutcheck.py"
+file = "mutt_check.py"
 find = "    if not isinstance(python, str) or not python:"
 replace = "    if not python:"
 

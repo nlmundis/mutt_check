@@ -12,9 +12,9 @@ import tomllib
 import unittest
 from pathlib import Path
 
-import mutcheck
+import mutt_check
 
-ROOT = Path(mutcheck.__file__).resolve().parent
+ROOT = Path(mutt_check.__file__).resolve().parent
 README = (ROOT / "README.md").read_text()
 
 
@@ -24,9 +24,9 @@ def toml_blocks(markdown: str) -> list[str]:
 
 
 class ExecutableBitTest(unittest.TestCase):
-    def test_mutcheck_is_executable_so_its_shebang_works(self):
-        self.assertTrue(os.access(ROOT / "mutcheck.py", os.X_OK),
-                        "mutcheck.py carries a shebang, so it must be executable")
+    def test_mutt_check_is_executable_so_its_shebang_works(self):
+        self.assertTrue(os.access(ROOT / "mutt_check.py", os.X_OK),
+                        "mutt_check.py carries a shebang, so it must be executable")
 
 
 class PackagingTest(unittest.TestCase):
@@ -45,7 +45,7 @@ class PackagingTest(unittest.TestCase):
         self.assertNotIn("version", project)
         self.assertEqual(project["dynamic"], ["version"])
         self.assertEqual(self.pyproject["tool"]["setuptools"]["dynamic"]["version"],
-                         {"attr": "mutcheck.__version__"})
+                         {"attr": "mutt_check.__version__"})
 
 
 class ReadmeExampleTest(unittest.TestCase):
@@ -66,9 +66,9 @@ class ReadmeExampleTest(unittest.TestCase):
         self.assertEqual(edits[0]["replace"], r"\A---")
 
     def test_documented_exit_codes_are_the_ones_the_code_uses(self):
-        for code, meaning in ((mutcheck.EXIT_PINNED, "every mutant caught"),
-                              (mutcheck.EXIT_UNPINNED, "survived"),
-                              (mutcheck.EXIT_UNUSABLE, "Control red")):
+        for code, meaning in ((mutt_check.EXIT_PINNED, "every mutant caught"),
+                              (mutt_check.EXIT_UNPINNED, "survived"),
+                              (mutt_check.EXIT_UNUSABLE, "Control red")):
             row = re.search(rf"^\| {code} \| (.+?) \|$", README, re.MULTILINE)
             self.assertIsNotNone(row, f"README has no exit table row for {code}")
             self.assertIn(meaning, row.group(1))

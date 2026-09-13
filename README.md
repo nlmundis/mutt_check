@@ -1,16 +1,16 @@
-# mutcheck
+# mutt_check
 
 Prove a test suite catches the defects it claims to pin.
 
 A green suite is evidence that nothing the suite checks is broken. It is not
 evidence that any particular design decision is pinned down, because a
 decision no test reaches can be reverted with every test still green.
-mutcheck takes a curated list of mutants, each one reverting one load-bearing
+mutt_check takes a curated list of mutants, each one reverting one load-bearing
 decision in the code under test, applies them one at a time to a throwaway
 copy of the project, and requires the suite to go red for every one.
 
 ```
-$ mutcheck
+$ mutt_check
   control            green     2 tests
   lowercase_dropped  caught    test_lowercases
   edges_not_trimmed  caught    test_strips_leading_and_trailing_separators
@@ -30,7 +30,7 @@ Single file, standard library only, Python 3.11 or newer.
 ## How this differs from mutation testing tools
 
 Tools like mutmut and cosmic-ray generate mutants by flipping operators and
-constants across the whole codebase, then report a kill rate. mutcheck does
+constants across the whole codebase, then report a kill rate. mutt_check does
 something narrower on purpose:
 
 - **The mutants are curated.** Each one is a design decision the code makes,
@@ -68,12 +68,12 @@ viewer.
 pip install .
 ```
 
-Or copy `mutcheck.py` into the repo and run it with `python mutcheck.py`. It
+Or copy `mutt_check.py` into the repo and run it with `python mutt_check.py`. It
 has no dependencies.
 
 ## The spec
 
-mutcheck reads `mutcheck.toml` from the current directory, or the path given
+mutt_check reads `mutt_check.toml` from the current directory, or the path given
 as its first argument. The project root is the spec's directory unless
 `--root` says otherwise.
 
@@ -226,7 +226,7 @@ name raises something other than an ImportError while importing.
 ## Command line
 
 ```
-mutcheck [spec] [--root DIR] [--only NAME ...] [--list] [--json] [--keep] [--version]
+mutt_check [spec] [--root DIR] [--only NAME ...] [--list] [--json] [--keep] [--version]
 ```
 
 - `--only NAME` runs one mutant (repeatable). Handy for re-running a survivor
@@ -279,7 +279,7 @@ now handled once:
   that ran zero tests is red too.
 - Anchors must appear exactly once; STALE fails the run.
 - Every run starts from a fresh copy of the tree (or a fresh staged copy of the
-  external file), so mutcheck never writes into the project, and mutants never
+  external file), so mutt_check never writes into the project, and mutants never
   see each other. A project whose symlinks point outside it is refused, since
   the suite would write through them and import the real code.
 - Line endings are preserved byte for byte, so the sandbox differs from the
@@ -322,7 +322,7 @@ now handled once:
   the suite imports inside a test body.** The import error reaches the suite as
   a failing test, which is indistinguishable from the mutation being noticed.
   Importing the file ourselves to tell them apart would run its top-level code,
-  which mutcheck has no business causing.
+  which mutt_check has no business causing.
 - **Only Python targets are compile-checked.** A data file a mutant makes
   unparseable is left to the suite.
 - **One summary per run.** A command that runs unittest twice is judged by the
@@ -330,14 +330,14 @@ now handled once:
 - **A target the operating system refuses to modify** (macOS `uchg`, or an
   immutable attribute) fails the run with exit 2 rather than being mutated.
 
-## Checking mutcheck itself
+## Checking mutt_check itself
 
 ```bash
 make check
 ```
 
-That runs the unit suite and then mutcheck against its own suite using the
-[`mutcheck.toml`](mutcheck.toml) in this repository, which reverts each of
+That runs the unit suite and then mutt_check against its own suite using the
+[`mutt_check.toml`](mutt_check.toml) in this repository, which reverts each of
 the rules above one at a time. Both are offline and touch nothing outside a temp
 directory. The unit suite takes seconds. The dogfood half runs one test class
 per mutant, which for this repository's fifty mutants takes about a minute.

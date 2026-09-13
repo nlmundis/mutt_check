@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""mutcheck: prove a test suite catches the defects it claims to pin.
+"""mutt_check: prove a test suite catches the defects it claims to pin.
 
 A green suite is evidence that nothing the suite checks is broken. It is
 not evidence that any particular design decision is pinned down, because a
 decision no test reaches can be reverted with every test still green.
-mutcheck takes a curated list of mutants, each one reverting one
+mutt_check takes a curated list of mutants, each one reverting one
 load-bearing decision in the code under test, applies them one at a time
 to a throwaway copy of the project, and requires the suite to go red for
 every one.
@@ -22,7 +22,7 @@ Four rules make the verdicts mean something:
 * A mutant the suite could not even load is BROKEN, not caught. A red
   suite proves something only when tests ran and failed.
 
-mutcheck never writes into the project: every edit lands in a temporary
+mutt_check never writes into the project: every edit lands in a temporary
 copy, or in a staged copy of an external file, and a path that resolves
 outside the sandbox through a symlink is refused. In copy mode the suite
 runs inside the sandbox as well. In stage mode it runs in the real tree,
@@ -51,7 +51,7 @@ from typing import Callable, Iterable, Sequence
 
 __version__ = "0.1.0"
 
-DEFAULT_SPEC = "mutcheck.toml"
+DEFAULT_SPEC = "mutt_check.toml"
 
 #: Never copied into the sandbox unless ``use_default_ignores = false``. A
 #: spec's ``ignore`` list extends this.
@@ -486,7 +486,7 @@ def _read_text(path: Path, label: str) -> str:
         with path.open(encoding="utf-8", newline="") as handle:
             return handle.read()
     except UnicodeDecodeError:
-        raise _Unreadable(f"{label} is not UTF-8; mutcheck edits UTF-8 text only")
+        raise _Unreadable(f"{label} is not UTF-8; mutt_check edits UTF-8 text only")
     except OSError:
         raise _Unreadable(f"cannot read {label}")
 
@@ -562,7 +562,7 @@ def run_once(spec: Spec, edits: Sequence[Edit],
     """
     if spec.stage is None:
         _refuse_temp_inside_project(spec)
-    tmp = Path(tempfile.mkdtemp(prefix="mutcheck-"))
+    tmp = Path(tempfile.mkdtemp(prefix="mutt_check-"))
     try:
         result = _run_in(tmp, spec, edits, suites)
     except BaseException as exc:
@@ -824,7 +824,7 @@ def _compiles_with(python: str, text: str) -> bool:
     """Whether ``python`` compiles ``text``; False when it cannot be asked.
 
     The suite runs under ``[run] python``, which may accept syntax the
-    interpreter running mutcheck does not, so a refusal is confirmed with
+    interpreter running mutt_check does not, so a refusal is confirmed with
     the interpreter that will actually import the file.
     """
     if not python or python == sys.executable:
@@ -843,7 +843,7 @@ def _compile_error(name: str, before: str, after: str,
     """Why a mutated Python file no longer compiles, or None.
 
     Only a file whose unmutated text compiles is judged, so a project
-    written for a newer Python than the one running mutcheck is never
+    written for a newer Python than the one running mutt_check is never
     reported BROKEN for syntax this interpreter lacks; where the suite runs
     under a different interpreter, a refusal is confirmed with that one. A
     byte-order mark is stripped for the check alone: the sandbox still gets
@@ -926,7 +926,7 @@ def _remove_sandbox(tmp: Path) -> bool:
     try:
         shutil.rmtree(tmp)
     except OSError as exc:
-        print(f"mutcheck: could not remove sandbox {tmp}: {exc}", file=sys.stderr)
+        print(f"mutt_check: could not remove sandbox {tmp}: {exc}", file=sys.stderr)
         return False
     return True
 
@@ -1231,7 +1231,7 @@ def list_mutants(spec: Spec, mutants: Sequence[Mutant] | None = None) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="mutcheck",
+        prog="mutt_check",
         description="Prove a test suite catches the defects it claims to pin.")
     parser.add_argument("spec", nargs="?", default=DEFAULT_SPEC,
                         help=f"TOML spec (default: {DEFAULT_SPEC})")
@@ -1262,7 +1262,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             lambda v: print(format_verdict(v, width), flush=True))
         report = check(spec, only=args.only, keep=args.keep, emit=emit)
     except (SpecError, RunError) as exc:
-        print(f"mutcheck: {exc}", file=sys.stderr)
+        print(f"mutt_check: {exc}", file=sys.stderr)
         return EXIT_UNUSABLE
     if args.json:
         print(json.dumps(report.as_json(), indent=2))
