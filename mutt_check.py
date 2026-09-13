@@ -52,7 +52,7 @@ except ModuleNotFoundError:  # Python 3.10 and earlier
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
-__version__ = "0.1.0"
+__version__ = "0.0.1"
 
 DEFAULT_SPEC = "mutt_check.toml"
 
