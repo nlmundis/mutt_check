@@ -52,7 +52,7 @@ except ModuleNotFoundError:  # Python 3.10 and earlier
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
-__version__ = "0.0.1"
+__version__ = "0.0.2"
 
 DEFAULT_SPEC = "mutt_check.toml"
 
@@ -973,9 +973,23 @@ def _clip(text: str, limit: int = 120) -> str:
 
 
 def _tail(completed: subprocess.CompletedProcess) -> str:
-    """The last non-blank line of output, for the detail column."""
-    lines = [ln.strip() for ln in _output(completed).splitlines() if ln.strip()]
-    return _clip(lines[-1] if lines else f"exit {completed.returncode}, no output")
+    """One line describing a run, for the detail column.
+
+    unittest closes with its own summary, so its last line is the answer.
+    Another runner ends with whatever it likes, which for one of them is a
+    closing brace, so only a line that reads like a summary is used and the
+    exit status is the answer otherwise.
+    """
+    text = _output(completed)
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return f"exit {completed.returncode}, no output"
+    if _last_ran(text) or _LOAD_FAILED in text:
+        return _clip(lines[-1])
+    for line in reversed(lines):
+        if _SUMMARY_RE.search(line):
+            return _clip(line)
+    return f"exit {completed.returncode}"
 
 
 def _last_ran(text: str) -> re.Match[str] | None:
@@ -1002,6 +1016,9 @@ def _skipped(text: str) -> int:
     return sum(int(a or b) for a, b in _SKIP_RE.findall(
         text[match.end():] if match else text))
 
+
+#: What a line has to say to be read as another runner's summary.
+_SUMMARY_RE = re.compile(r"fail|pass|error", re.IGNORECASE)
 
 #: unittest's own frames, which appear however the runner was spelled.
 _UNITTEST_FRAME_RE = re.compile(r"unittest[/\\](?:loader|main|suite)\.py")

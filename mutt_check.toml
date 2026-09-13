@@ -461,3 +461,14 @@ suites = ["tests.test_repo.VersionSupportTest"]
 file = ".github/workflows/check.yml"
 find = 'python: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]'
 replace = 'python: ["3.11", "3.12", "3.13", "3.14"]'
+
+[[mutant]]
+name = "detail_repeats_whatever_the_last_line_says"
+why = "Another runner ends with anything at all; a closing brace as the verdict's detail tells the reader nothing."
+suites = ["tests.test_sandbox.DetailColumnTest"]
+file = "mutt_check.py"
+find = """    for line in reversed(lines):
+        if _SUMMARY_RE.search(line):
+            return _clip(line)
+    return f"exit {completed.returncode}\""""
+replace = "    return _clip(lines[-1])"

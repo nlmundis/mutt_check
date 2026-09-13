@@ -617,3 +617,37 @@ class RunnerDetectionTest(MutcheckCase):
         self.assertEqual(code, mutt_check.EXIT_PINNED, out + err)
         self.assertRegex(out, r"control\s+green")
         self.assertRegex(out, r"lowercase_dropped\s+caught")
+
+
+class DetailColumnTest(MutcheckCase):
+    """What the detail column says when the runner is not unittest."""
+
+    def spec_printing(self, lines: str, exit_code: str) -> Path:
+        script = self.fx.root / "runner.py"
+        script.write_text(f'import sys\nprint({lines!r})\nsys.exit({exit_code})\n')
+        spec = self.fx.write_spec(MUTANT_LOWER, run_extra=(
+            f'command = ["{sys.executable}", "runner.py"]'))
+        spec.write_text(spec.read_text().replace(
+            'suites = ["tests.test_slugify"]\n', "", 1))
+        return spec
+
+    def test_noise_at_the_end_of_output_is_not_read_as_a_result(self):
+        # node --test ends with a brace and a duration; neither says anything.
+        spec = self.spec_printing("}", "0 if open('slugify.py').read().count('lower')"
+                                       " else 1")
+        code, out, _ = run_main(str(spec))
+        self.assertEqual(code, mutt_check.EXIT_PINNED, out)
+        self.assertRegex(out, r"(?m)^  lowercase_dropped\s+caught\s+exit 1$")
+
+    def test_a_summary_line_is_preferred_over_the_last_line(self):
+        spec = self.spec_printing("2 failed, 1 passed\n}", "0 if open('slugify.py')"
+                                                           ".read().count('lower') else 1")
+        code, out, _ = run_main(str(spec))
+        self.assertEqual(code, mutt_check.EXIT_PINNED, out)
+        self.assertRegex(out, r"(?m)^  lowercase_dropped\s+caught\s+2 failed, 1 passed$")
+
+    def test_unittest_keeps_its_own_closing_line(self):
+        spec = self.fx.write_spec(MUTANT_LOWER)
+        code, out, _ = run_main(str(spec))
+        self.assertEqual(code, mutt_check.EXIT_PINNED, out)
+        self.assertRegex(out, r"control\s+green\s+2 tests")

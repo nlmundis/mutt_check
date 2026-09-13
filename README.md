@@ -191,7 +191,7 @@ A staged file that is not UTF-8 is a spec error.
 |---|---|
 | `control green` | The unmutated tree passed. Mutant verdicts below mean something. |
 | `control RED` | The unmutated tree failed, skipped tests, ran zero tests, or ran past `timeout`. Nothing else runs. Exit 2. |
-| `caught` | The suite went red with the mutant applied. Under unittest the named tests are the ones that failed; under another runner the detail is the last line of output. |
+| `caught` | The suite went red with the mutant applied. Under unittest the named tests are the ones that failed; under another runner the detail is a line of the output that reads like a summary, or the exit status when none does. |
 | `SURVIVED` | The suite stayed green. Nothing pins that decision. Exit 1. |
 | `STALE` | The anchor was not found exactly once, or the target could not be edited: it is not UTF-8, the file mixes line endings, or an ignore pattern kept it out of the copy. The mutant tested nothing. Exit 1. |
 | `BROKEN` | The mutated file does not compile, or the suite ran but could not deliver a verdict: a test module failed to import, zero tests ran, or the run hit `timeout`. Rewrite the mutant so the code still loads. Exit 1. |
