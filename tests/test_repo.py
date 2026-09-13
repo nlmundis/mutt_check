@@ -48,6 +48,28 @@ class PackagingTest(unittest.TestCase):
                          {"attr": "mutt_check.__version__"})
 
 
+class AgentsFileTest(unittest.TestCase):
+    """The file an agent reads has to name commands that exist."""
+
+    def test_every_make_command_it_names_is_a_real_target(self):
+        agents = (ROOT / "AGENTS.md").read_text()
+        phony = re.search(r"^\.PHONY: (.+)$", (ROOT / "Makefile").read_text(), re.MULTILINE)
+        self.assertIsNotNone(phony, "Makefile declares no .PHONY targets")
+        # Commands only: inside a fenced block, or in backticks. Prose such
+        # as "make a change here" is not a target.
+        blocks = "\n".join(re.findall(r"^```bash\n(.*?)^```", agents,
+                                      re.MULTILINE | re.DOTALL))
+        named = set(re.findall(r"^make ([a-z][a-z-]*)", blocks, re.MULTILINE))
+        named |= set(re.findall(r"`make ([a-z][a-z-]*)`", agents))
+        self.assertTrue(named, "AGENTS.md names no make commands")
+        self.assertEqual(named - set(phony.group(1).split()), set())
+
+    def test_it_names_the_tool_as_the_command_actually_is(self):
+        agents = (ROOT / "AGENTS.md").read_text()
+        self.assertIn("mutt_check", agents)
+        self.assertNotIn("mutcheck", agents.replace("mutt_check", ""))
+
+
 class ReadmeExampleTest(unittest.TestCase):
     def test_every_toml_example_parses(self):
         blocks = toml_blocks(README)

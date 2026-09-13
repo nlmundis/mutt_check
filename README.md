@@ -253,6 +253,44 @@ The JSON report has one entry per verdict, in run order:
 }
 ```
 
+## Driving it from an agent or CI
+
+mutt_check is a plain command with machine-readable output, so anything that can
+run a shell command in a checkout can drive it: an agent CLI, a CI job, a git
+hook. It needs a filesystem, a Python 3.11 or newer interpreter, and permission
+to start subprocesses, since running the suite is the whole point. A chat
+surface with no shell cannot run it, and neither can a sandbox that forbids
+subprocesses.
+
+Read the result from the exit code first, then `--json` for the detail:
+`survived`, `stale` and `broken` name the mutants, `selected` and `applied` are
+the counts the summary line quotes, and `leaked_sandboxes` counts temp
+directories that could not be removed.
+
+```bash
+mutt_check --json | python -c "import json,sys; print(json.load(sys.stdin)['survived'])"
+```
+
+An agent working inside this repository should read [AGENTS.md](AGENTS.md),
+which names the commands and the rules a change here has to keep. Writing the
+same file for your own project is how you tell an agent that a survived mutant
+means write a test, and that a stale one means realign the anchor.
+
+In CI, run it as one step and let the exit code fail the build. GitHub Actions
+for this repository is in [.github/workflows/check.yml](.github/workflows/check.yml).
+Bitbucket Pipelines:
+
+```yaml
+pipelines:
+  default:
+    - step:
+        name: mutt_check
+        image: python:3.12
+        script:
+          - pip install .
+          - mutt_check
+```
+
 ## Writing mutants that mean something
 
 - **Revert a decision, not an operator.** `max` to `min` is a good mutant when
