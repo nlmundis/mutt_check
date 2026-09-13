@@ -255,7 +255,7 @@ name = "symlink_written_through"
 why = "Defence in depth: even a link the copy check missed must never be written through."
 suites = ["tests.test_sandbox.IsolationTest"]
 file = "mutt_check.py"
-find = "        if not resolved.is_relative_to(inside):"
+find = "        if not _inside(resolved, inside):"
 replace = "        if False:"
 
 [[mutant]]
@@ -263,15 +263,15 @@ name = "temp_dir_inside_project_allowed"
 why = "A TMPDIR under the project makes the copy walk into its own sandbox."
 suites = ["tests.test_sandbox.IsolationTest"]
 file = "mutt_check.py"
-find = """    if not temp.is_relative_to(root):
+find = """    if not _inside(temp, root):
         return"""
 replace = """    if True:
         return"""
 
 [[mutant]]
 name = "copy_not_first_on_pythonpath"
-why = "Under PYTHONSAFEPATH, or with the real tree on PYTHONPATH, the suite would import the unmutated code."
-suites = ["tests.test_sandbox.IsolationTest"]
+why = "Under PYTHONSAFEPATH, or with the real tree on PYTHONPATH, the suite would import the unmutated code. PythonPathTest is named too because PYTHONSAFEPATH only exists from 3.11, so on the floor version IsolationTest alone would not catch this."
+suites = ["tests.test_sandbox.IsolationTest", "tests.test_sandbox.PythonPathTest"]
 file = "mutt_check.py"
 find = '        env["PYTHONPATH"] = _sandbox_pythonpath(work, spec.root, env.get("PYTHONPATH", ""))'
 replace = "        pass"
@@ -445,3 +445,19 @@ suites = ["tests.test_repo.ReadmeExampleTest"]
 file = "README.md"
 find = '\A\ufeff?---'
 replace = '\\A\\ufeff?---'
+
+[[mutant]]
+name = "tomli_dependency_dropped"
+why = "Without tomllib in the stdlib, the tool cannot read a spec at all on 3.10 and earlier."
+suites = ["tests.test_repo.VersionSupportTest"]
+file = "pyproject.toml"
+find = """dependencies = ['tomli>=1.1.0; python_version < "3.11"']"""
+replace = "dependencies = []"
+
+[[mutant]]
+name = "ci_stops_testing_the_floor_version"
+why = "A version the package claims and CI never runs is a claim nothing checks."
+suites = ["tests.test_repo.VersionSupportTest"]
+file = ".github/workflows/check.yml"
+find = 'python: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]'
+replace = 'python: ["3.11", "3.12", "3.13", "3.14"]'

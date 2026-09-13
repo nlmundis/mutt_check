@@ -4,8 +4,9 @@ mutt_check proves a test suite catches the defects it claims to pin. It applies
 the curated mutants listed in `mutt_check.toml` to a throwaway copy of a
 project, runs the suite, and requires the suite to go red for every one.
 
-One module, `mutt_check.py`. Standard library only, Python 3.11 or newer, Linux
-or macOS. Nothing here needs network access.
+One module, `mutt_check.py`. Python 3.9 or newer, Linux or macOS. Standard
+library only, except `tomli` on 3.10 and earlier, where the stdlib has no
+`tomllib`. Nothing here needs network access.
 
 ## Commands
 
@@ -22,7 +23,7 @@ suite under each supported interpreter when you touch anything version
 sensitive:
 
 ```bash
-python3.11 -B -m unittest discover -s tests -t .
+python3.9 -B -m unittest discover -s tests -t .
 ```
 
 ## Reading a run
@@ -47,7 +48,11 @@ Both 1 and 2 are failures.
   commit. The gate will call it STALE, so you will know.
 - No test may skip. A skipped test makes the dogfood control red, because a
   skipped test can catch nothing.
-- No dependencies. The answer is the standard library.
+- No new dependencies. The only one is `tomli`, and only where the standard
+  library has no `tomllib`. Anything else is answered by the stdlib.
+- New code must run on the floor version, 3.9: no `match`, no runtime `X | Y`
+  unions, no `removeprefix`, no `Path.is_relative_to`. Annotations are fine,
+  since the module imports `annotations` from `__future__`.
 - Never weaken a guard to make a test pass. Every guard here exists because a
   wrong result once read as success.
 - A name and its docstring must let a reader predict what a function does, and

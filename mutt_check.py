@@ -45,7 +45,10 @@ import stat
 import subprocess
 import sys
 import tempfile
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10 and earlier
+    import tomli as tomllib
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
@@ -286,6 +289,19 @@ def _reject_ignored_targets(mutants: Sequence[Mutant], ignore: Sequence[str]) ->
                             f"from the sandbox by ignore pattern {pattern!r}")
 
 
+def _inside(path: Path, other: Path) -> bool:
+    """Whether ``path`` is ``other`` or a path below it.
+
+    ``Path.is_relative_to`` says this in one call, but only from Python 3.9,
+    and this tool runs on the floor version it claims to support.
+    """
+    try:
+        path.relative_to(other)
+    except ValueError:
+        return False
+    return True
+
+
 def _table(raw: dict, key: str) -> dict:
     value = raw.get(key, {})
     if not isinstance(value, dict):
@@ -515,7 +531,7 @@ def _read_under(work: Path, root: Path | None = None) -> Callable[[str], str]:
                 raise _Unreadable(f"{file} is in the project but not in the sandbox, "
                                   "so an ignore pattern excluded it")
             raise _Unreadable(f"cannot read {file}")
-        if not resolved.is_relative_to(inside):
+        if not _inside(resolved, inside):
             raise _Unreadable(f"{file} resolves outside the sandbox through a "
                               "symlink; refusing to write through it")
         return _read_text(path, file)
@@ -644,7 +660,7 @@ def _refuse_temp_inside_project(spec: Spec) -> None:
     """
     temp = Path(tempfile.gettempdir()).resolve()
     root = spec.root.resolve()
-    if not temp.is_relative_to(root):
+    if not _inside(temp, root):
         return
     inside = temp.relative_to(root)
     if any(fnmatch.fnmatch(part, pattern)
@@ -719,7 +735,7 @@ def _sandbox_pythonpath(work: Path, root: Path, current: str) -> str:
         if resolved == root:
             continue
         entries.append(str(work / resolved.relative_to(root))
-                       if resolved.is_relative_to(root) else entry)
+                       if _inside(resolved, root) else entry)
     return os.pathsep.join(entries)
 
 
@@ -755,7 +771,7 @@ def _escaping_links(work: Path, skip: frozenset[str] = frozenset()) -> list[str]
             if not path.is_symlink() or str(path.relative_to(work)) in skip:
                 continue
             try:
-                escapes = not path.resolve().is_relative_to(inside)
+                escapes = not _inside(path.resolve(), inside)
             except (OSError, RuntimeError):
                 escapes = True
             if escapes:

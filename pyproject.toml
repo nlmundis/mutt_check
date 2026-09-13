@@ -7,7 +7,7 @@ name = "mutt_check"
 dynamic = ["version"]
 description = "Prove a test suite catches the defects it claims to pin: curated mutants, a mandatory control run, and a STALE verdict."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.9"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Nathan Mundis" }]
@@ -17,12 +17,16 @@ classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: POSIX",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Testing",
 ]
-dependencies = []
+# tomllib arrived in 3.11; tomli is the same parser for the versions below it.
+dependencies = ['tomli>=1.1.0; python_version < "3.11"']
 
 [project.scripts]
 mutt_check = "mutt_check:main"

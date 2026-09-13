@@ -25,7 +25,8 @@ and no test checks it. `collapse_dropped` reverts that decision and the suite
 does not notice. That is the gap this tool exists to show, and the exit code
 is 1 until a test closes it.
 
-Single file, standard library only, Python 3.11 or newer.
+Single file, Python 3.9 or newer. Standard library only, except `tomli` on
+3.10 and earlier, where the standard library has no `tomllib`.
 
 ## How this differs from mutation testing tools
 
@@ -69,7 +70,8 @@ pip install .
 ```
 
 Or copy `mutt_check.py` into the repo and run it with `python mutt_check.py`. It
-has no dependencies.
+pulls in `tomli` only on Python 3.10 and earlier, where the standard library
+has no `tomllib`.
 
 ## The spec
 
@@ -257,7 +259,7 @@ The JSON report has one entry per verdict, in run order:
 
 mutt_check is a plain command with machine-readable output, so anything that can
 run a shell command in a checkout can drive it: an agent CLI, a CI job, a git
-hook. It needs a filesystem, a Python 3.11 or newer interpreter, and permission
+hook. It needs a filesystem, a Python 3.9 or newer interpreter, and permission
 to start subprocesses, since running the suite is the whole point. A chat
 surface with no shell cannot run it, and neither can a sandbox that forbids
 subprocesses.

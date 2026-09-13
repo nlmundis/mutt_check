@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import os
 import re
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 import unittest
 from pathlib import Path
 
@@ -68,6 +71,37 @@ class AgentsFileTest(unittest.TestCase):
         agents = (ROOT / "AGENTS.md").read_text()
         self.assertIn("mutt_check", agents)
         self.assertNotIn("mutcheck", agents.replace("mutt_check", ""))
+
+
+class VersionSupportTest(unittest.TestCase):
+    """The supported versions are one set, not three that drift apart."""
+
+    def setUp(self):
+        self.pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
+        self.workflow = (ROOT / ".github" / "workflows" / "check.yml").read_text()
+
+    def classified(self):
+        listed = "\n".join(self.pyproject["project"]["classifiers"])
+        found = re.findall(r"Programming Language :: Python :: (3\.\d+)", listed)
+        return sorted(found, key=lambda v: int(v.split(".")[1]))
+
+    def test_the_floor_is_the_oldest_version_claimed(self):
+        self.assertEqual(self.pyproject["project"]["requires-python"],
+                         f">={self.classified()[0]}")
+
+    def test_ci_runs_every_version_the_package_claims(self):
+        matrix = re.search(r"python: \[(.+?)\]", self.workflow)
+        self.assertIsNotNone(matrix, "the workflow has no python matrix")
+        tested = sorted(re.findall(r"3\.\d+", matrix.group(1)),
+                        key=lambda v: int(v.split(".")[1]))
+        self.assertEqual(tested, self.classified())
+
+    def test_the_tomli_fallback_and_its_dependency_agree(self):
+        # One without the other means the tool cannot read a spec on the
+        # versions it claims, or carries a dependency it never uses.
+        fallback = "import tomli as tomllib" in (ROOT / "mutt_check.py").read_text()
+        declared = " ".join(self.pyproject["project"]["dependencies"])
+        self.assertEqual(fallback, "tomli" in declared and 'python_version < "3.11"' in declared)
 
 
 class ReadmeExampleTest(unittest.TestCase):
