@@ -1,5 +1,5 @@
 # mutt_check run against itself. Every entry reverts one of the tool's own
-# load-bearing decisions and names the reason the decision exists. `suites`
+# decisions the tool depends on and names the reason that decision exists. `suites`
 # names the test class that pins it, so the spec doubles as a map from each
 # decision to its test. `make check` runs this after the unit suite.
 #

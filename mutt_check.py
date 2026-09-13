@@ -4,8 +4,8 @@
 A green suite is evidence that nothing the suite checks is broken. It is
 not evidence that any particular design decision is pinned down, because a
 decision no test reaches can be reverted with every test still green.
-mutt_check takes a curated list of mutants, each one reverting one
-load-bearing decision in the code under test, applies them one at a time
+mutt_check takes a curated list of mutants, each one reverting a decision
+the code genuinely rests on, applies them one at a time
 to a throwaway copy of the project, and requires the suite to go red for
 every one.
 
