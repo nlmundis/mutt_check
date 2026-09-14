@@ -383,6 +383,10 @@ the rules above one at a time. Both are offline and touch nothing outside a temp
 directory. The unit suite takes seconds. The dogfood half runs one test class
 per mutant, which for this repository's fifty mutants takes about a minute.
 
+Changes reach `main` through pull requests that pass CI. A `vX.Y.Z` tag that
+matches `__version__` publishes a GitHub Release with the built sdist and wheel
+after the same checks pass; see `AGENTS.md`.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

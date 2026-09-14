@@ -1,0 +1,52 @@
+name: release
+
+# Push a tag like v0.1.0 on a commit that is already on main, after setting
+# mutt_check.__version__ to the same number. The full gate runs on that commit;
+# only if it passes is the package built, installed from its own wheel as a
+# smoke test, and attached to a GitHub Release. Nothing is uploaded to PyPI.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    uses: ./.github/workflows/check.yml
+
+  release:
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Refuse a tag that is not on main
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD \
+            || { echo "::error::$GITHUB_REF_NAME is not on main"; exit 1; }
+      - name: Refuse a tag that does not match the package version
+        run: |
+          version="$(python -c 'import mutt_check; print(mutt_check.__version__)')"
+          test "v$version" = "$GITHUB_REF_NAME" \
+            || { echo "::error::tag $GITHUB_REF_NAME but mutt_check.__version__ is $version"; exit 1; }
+      - name: Build the sdist and wheel
+        run: |
+          pip install build==1.6.1
+          python -m build
+      - name: Install the built wheel and run it
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install dist/*.whl
+          test "$(/tmp/smoke/bin/mutt_check --version)" = "mutt_check ${GITHUB_REF_NAME#v}"
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes --title "$GITHUB_REF_NAME"

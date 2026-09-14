@@ -470,3 +470,13 @@ find = """    for line in reversed(lines):
             return _clip(line)
     return f"exit {completed.returncode}\""""
 replace = "    return _clip(lines[-1])"
+
+# --- release automation ------------------------------------------------------
+
+[[mutant]]
+name = "required_check_renamed_in_ci"
+why = "Branch protection waits forever for a check name no job reports, or protects nothing if the rule is removed to unblock it."
+suites = ["tests.test_repo.ReleaseAutomationTest"]
+file = ".github/workflows/check.yml"
+find = "    name: all checks passed"
+replace = "    name: all checks"

@@ -6,6 +6,7 @@ packaging field, an escape in a README example. The gate has to notice.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -107,6 +108,33 @@ class VersionSupportTest(unittest.TestCase):
         declared = " ".join(self.pyproject["project"]["dependencies"])
         self.assertEqual(fallback, "tomli" in declared and 'python_version < "3.11"' in declared)
 
+
+class ReleaseAutomationTest(unittest.TestCase):
+    """The branch ruleset, the CI job it requires, and the release gate must name each other correctly."""
+
+    def test_the_required_check_is_the_aggregate_job_ci_actually_runs(self):
+        ruleset = json.loads((ROOT / ".github" / "rulesets" / "main.json").read_text())
+        checks = [rule for rule in ruleset["rules"] if rule["type"] == "required_status_checks"]
+        self.assertEqual(len(checks), 1)
+        required = {c["context"] for c in checks[0]["parameters"]["required_status_checks"]}
+        workflow = (ROOT / ".github" / "workflows" / "check.yml").read_text()
+        pattern = r"^  all-checks:\n    name: (.+)\n    if: always\(\)\n    needs: \[check\]$"
+        aggregate = re.search(pattern, workflow, re.M)
+        assert aggregate is not None, "check.yml has no aggregate all-checks job"
+        self.assertEqual(required, {aggregate.group(1)})
+
+    def test_a_release_runs_the_same_gate_and_checks_the_version_first(self):
+        release = (ROOT / ".github" / "workflows" / "release.yml").read_text()
+        self.assertIn("uses: ./.github/workflows/check.yml", release)
+        self.assertIn("needs: checks", release)
+        self.assertIn("workflow_call:", (ROOT / ".github" / "workflows" / "check.yml").read_text())
+        self.assertLess(release.index("mutt_check.__version__"), release.index("gh release create"))
+        self.assertNotIn("pypi", release.lower().replace("nothing is uploaded to pypi", ""))
+
+    def test_release_tags_are_protected_from_moving(self):
+        ruleset = json.loads((ROOT / ".github" / "rulesets" / "release-tags.json").read_text())
+        self.assertEqual(ruleset["target"], "tag")
+        self.assertEqual({rule["type"] for rule in ruleset["rules"]}, {"deletion", "non_fast_forward", "update"})
 
 class ReadmeExampleTest(unittest.TestCase):
     def test_every_toml_example_parses(self):

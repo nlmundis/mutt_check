@@ -41,6 +41,18 @@ Both 1 and 2 are failures.
 - `BROKEN` means the suite could not deliver a verdict at all, usually because
   the mutated file no longer loads. Rewrite the mutant so the code still loads.
 
+## Changes and releases
+
+`main` is protected by the ruleset in `.github/rulesets/main.json`: every change
+lands through a pull request, squash or rebase, after the `all checks passed`
+job is green. To release, set `__version__` in `mutt_check.py`, merge that,
+then push a tag `vX.Y.Z` with the same number on the merged commit.
+`.github/workflows/release.yml` reruns the whole gate, refuses a tag that is
+not on `main` or does not match `__version__`, builds the sdist and wheel,
+installs the wheel as a smoke test, and attaches both to a GitHub Release.
+Nothing goes to PyPI. Release tags cannot be moved or deleted
+(`.github/rulesets/release-tags.json`), so a mistake is fixed by a new version.
+
 ## Rules for changing this repository
 
 - A mutant goes into `mutt_check.toml` only together with the test that kills
