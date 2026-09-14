@@ -18,4 +18,6 @@ jobs:
           python-version: ${{ matrix.python }}
       # Installs the conditional tomli dependency on 3.10 and earlier.
       - run: pip install .
+      # ruff, mypy and tomli for mypy, each pinned so a new release cannot turn this build red on its own.
+      - run: pip install -r requirements-dev.txt
       - run: make check PYTHON=python

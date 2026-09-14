@@ -60,10 +60,8 @@ name = "first_ran_line_trusted"
 why = "unittest's own summary is the last 'Ran N tests' line; one a test printed must not decide the run."
 suites = ["tests.test_sandbox.BrokenTest"]
 file = "mutt_check.py"
-find = '''    last = None
-    for last in _RAN_RE.finditer(text):
-        pass
-    return last'''
+find = '''    matches = list(_RAN_RE.finditer(text))
+    return matches[-1] if matches else None'''
 replace = "    return _RAN_RE.search(text)"
 
 [[mutant]]
@@ -376,7 +374,7 @@ why = "A sandbox that cannot be built is an infrastructure fault with exit 2, no
 suites = ["tests.test_sandbox.StagingErrorTest"]
 file = "mutt_check.py"
 find = """        except (OSError, ValueError) as exc:
-            raise RunError(f"cannot stage {stage.file.name} at {staged}: {exc}")"""
+            raise RunError(f"cannot stage {stage.file.name} at {staged}: {exc}") from exc"""
 replace = """        except (OSError, ValueError):
             raise"""
 

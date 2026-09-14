@@ -164,7 +164,7 @@ class IsolationTest(MutcheckCase):
 
     def test_recursion_while_copying_exits_two(self):
         spec = self.fx.write_spec(MUTANT_LOWER)
-        with mock.patch.object(mutt_check.shutil, "copytree",
+        with mock.patch.object(shutil, "copytree",
                                side_effect=RecursionError("maximum recursion depth")):
             code, out, err = run_main(str(spec))
         self.assertEqual(code, mutt_check.EXIT_UNUSABLE, out)
@@ -423,13 +423,14 @@ class CompileGuardTest(MutcheckCase):
         refuses.write_text("#!/bin/sh\nexit 1\n")
         refuses.chmod(0o755)
         self.assertIsNone(mutt_check._compile_error("m.py", "x = 1\n", "x = (\n", str(accepts)))
-        self.assertIn("does not compile",
-                      mutt_check._compile_error("m.py", "x = 1\n", "x = (\n", str(refuses)))
+        refused = mutt_check._compile_error("m.py", "x = 1\n", "x = (\n", str(refuses))
+        assert refused is not None
+        self.assertIn("does not compile", refused)
 
 
 class LineEndingTest(MutcheckCase):
     def apply(self, find, replace, text):
-        written = {}
+        written: dict[str, str] = {}
         reason = mutt_check.apply_edits((mutt_check.Edit("f.py", find, replace),),
                                       lambda _f: text, written.__setitem__)
         return reason, written.get("f.py")
@@ -487,7 +488,7 @@ class LeakAccountingTest(MutcheckCase):
         controlled.mkdir()
         spec = self.fx.write_spec(MUTANT_LOWER)
         with mock.patch.object(tempfile, "tempdir", str(controlled)):
-            with mock.patch.object(mutt_check.shutil, "rmtree", side_effect=OSError("busy")):
+            with mock.patch.object(shutil, "rmtree", side_effect=OSError("busy")):
                 code, out, err = run_main(str(spec))
         self.assertEqual(code, mutt_check.EXIT_PINNED, out)
         self.assertIn("2 sandbox(es) could not be removed", out)

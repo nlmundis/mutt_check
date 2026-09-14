@@ -11,7 +11,9 @@ library only, except `tomli` on 3.10 and earlier, where the stdlib has no
 ## Commands
 
 ```bash
-make check     # the gate: unit suite, then mutt_check against its own suite
+make check     # the gate: ruff, mypy, unit suite, then mutt_check against its own suite
+make lint      # ruff only
+make typecheck # mypy only, strict, against Python 3.9
 make test      # unit suite only, a few seconds
 make dogfood   # the self-mutation run only, about a minute
 make example   # the worked example, where one mutant survives on purpose

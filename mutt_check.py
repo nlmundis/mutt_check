@@ -45,12 +45,14 @@ import stat
 import subprocess
 import sys
 import tempfile
-try:
+
+if sys.version_info >= (3, 11):
     import tomllib
-except ModuleNotFoundError:  # Python 3.10 and earlier
+else:  # Python 3.10 and earlier
     import tomli as tomllib
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Callable, Iterable, Sequence
+from typing import Any, Callable
 
 __version__ = "0.0.2"
 
@@ -188,7 +190,7 @@ def load_spec(path: Path, root: Path | None = None) -> Spec:
                       path.absolute())
 
 
-def parse_spec(raw: dict, root: Path, spec_file: Path | None = None) -> Spec:
+def parse_spec(raw: dict[str, Any], root: Path, spec_file: Path | None = None) -> Spec:
     """Validate a decoded spec against ``root``; every problem is a SpecError."""
     if not root.is_dir():
         raise SpecError(f"project root is not a directory: {root}")
@@ -264,7 +266,7 @@ def _interpreter(python: object, root: Path) -> str:
     return python
 
 
-def _reject_unknown(table: dict, known: frozenset[str], where: str) -> None:
+def _reject_unknown(table: dict[str, Any], known: frozenset[str], where: str) -> None:
     """Refuse keys a table does not define, naming the ones it does."""
     extra = sorted(set(table) - known)
     if extra:
@@ -302,14 +304,14 @@ def _inside(path: Path, other: Path) -> bool:
     return True
 
 
-def _table(raw: dict, key: str) -> dict:
+def _table(raw: dict[str, Any], key: str) -> dict[str, Any]:
     value = raw.get(key, {})
     if not isinstance(value, dict):
         raise SpecError(f"[{key}] must be a table")
     return value
 
 
-def _strings(table: dict, key: str, where: str) -> tuple[str, ...]:
+def _strings(table: dict[str, Any], key: str, where: str) -> tuple[str, ...]:
     value = table.get(key, [])
     if not isinstance(value, list) or not all(
             isinstance(v, str) and v for v in value):
@@ -501,10 +503,10 @@ def _read_text(path: Path, label: str) -> str:
     try:
         with path.open(encoding="utf-8", newline="") as handle:
             return handle.read()
-    except UnicodeDecodeError:
-        raise _Unreadable(f"{label} is not UTF-8; mutt_check edits UTF-8 text only")
-    except OSError:
-        raise _Unreadable(f"cannot read {label}")
+    except UnicodeDecodeError as exc:
+        raise _Unreadable(f"{label} is not UTF-8; mutt_check edits UTF-8 text only") from exc
+    except OSError as exc:
+        raise _Unreadable(f"cannot read {label}") from exc
 
 
 def _write_text(path: Path, text: str) -> None:
@@ -526,11 +528,11 @@ def _read_under(work: Path, root: Path | None = None) -> Callable[[str], str]:
         path = work / file
         try:
             resolved = path.resolve(strict=True)
-        except OSError:
+        except OSError as exc:
             if root is not None and (root / file).exists():
                 raise _Unreadable(f"{file} is in the project but not in the sandbox, "
-                                  "so an ignore pattern excluded it")
-            raise _Unreadable(f"cannot read {file}")
+                                  "so an ignore pattern excluded it") from exc
+            raise _Unreadable(f"cannot read {file}") from exc
         if not _inside(resolved, inside):
             raise _Unreadable(f"{file} resolves outside the sandbox through a "
                               "symlink; refusing to write through it")
@@ -558,7 +560,7 @@ class RunResult:
     ``leaked`` is set when the sandbox could not be removed afterwards.
     """
 
-    completed: subprocess.CompletedProcess | None
+    completed: subprocess.CompletedProcess[str] | None
     problem: str | None
     detail: str
     sandbox: Path
@@ -624,7 +626,7 @@ def _run_in(tmp: Path, spec: Spec, edits: Sequence[Edit],
             staged.parent.mkdir(parents=True, exist_ok=True)
             _write_text(staged, stage.source)
         except (OSError, ValueError) as exc:
-            raise RunError(f"cannot stage {stage.file.name} at {staged}: {exc}")
+            raise RunError(f"cannot stage {stage.file.name} at {staged}: {exc}") from exc
         edits = [dataclasses.replace(e, file=stage.file.name) for e in edits]
 
         def read(file: str) -> str:
@@ -703,10 +705,10 @@ def _copy_project(spec: Spec, work: Path) -> None:
                  for entry in entries if isinstance(entry, tuple) and len(entry) == 3]
         raise RunError("could not copy the project into the sandbox: "
                        + _first_five(lines or [str(exc)])
-                       + ". Add unreadable or special files to [run] ignore")
+                       + ". Add unreadable or special files to [run] ignore") from exc
     except (OSError, RecursionError) as exc:
         raise RunError("could not copy the project into the sandbox: "
-                       f"{type(exc).__name__}: {exc}")
+                       f"{type(exc).__name__}: {exc}") from exc
     escaping = _escaping_links(work, _spec_link(spec))
     if escaping:
         raise RunError("symlinks in the project point outside it, so the suite "
@@ -812,7 +814,7 @@ def _write_sandboxed(path: Path, text: str) -> None:
             path.chmod(mode | stat.S_IWUSR)
         _write_text(path, text)
     except OSError as exc:
-        raise RunError(f"cannot write {path.name} in the sandbox: {exc}")
+        raise RunError(f"cannot write {path.name} in the sandbox: {exc}") from exc
 
 
 #: Suffixes that make a file Python source whatever its first line says.
@@ -886,7 +888,7 @@ def _compile_error(name: str, before: str, after: str,
 
 
 def _run_suite(command: Sequence[str], cwd: Path, env: dict[str, str],
-               timeout: float | None) -> subprocess.CompletedProcess | None:
+               timeout: float | None) -> subprocess.CompletedProcess[str] | None:
     """Run the suite in its own process group. None means it timed out.
 
     Output goes to unnamed temp files rather than pipes, so a process the
@@ -899,7 +901,7 @@ def _run_suite(command: Sequence[str], cwd: Path, env: dict[str, str],
             proc = subprocess.Popen(command, cwd=cwd, env=env, stdout=out,
                                     stderr=err, start_new_session=True)
         except OSError as exc:
-            raise RunError(f"cannot run {command[0]}: {exc}")
+            raise RunError(f"cannot run {command[0]}: {exc}") from exc
         returncode: int | None = None
         try:
             returncode = proc.wait(timeout=timeout)
@@ -917,7 +919,7 @@ def _run_suite(command: Sequence[str], cwd: Path, env: dict[str, str],
             err.read().decode("utf-8", "replace"))
 
 
-def _kill_group(proc: subprocess.Popen) -> None:
+def _kill_group(proc: subprocess.Popen[bytes]) -> None:
     """Kill every process left in the suite's group, then reap the suite."""
     try:
         os.killpg(proc.pid, signal.SIGKILL)
@@ -958,7 +960,7 @@ _LOAD_FAILED = "unittest.loader._FailedTest"
 _SEPARATOR = "\n" + "=" * 70
 
 
-def _output(completed: subprocess.CompletedProcess) -> str:
+def _output(completed: subprocess.CompletedProcess[str]) -> str:
     """stdout, then stderr, where unittest writes its closing summary.
 
     With stderr last, the runner's own summary follows anything the tests
@@ -972,7 +974,7 @@ def _clip(text: str, limit: int = 120) -> str:
     return text if len(text) <= limit else text[:limit - 3] + "..."
 
 
-def _tail(completed: subprocess.CompletedProcess) -> str:
+def _tail(completed: subprocess.CompletedProcess[str]) -> str:
     """One line describing a run, for the detail column.
 
     unittest closes with its own summary, so its last line is the answer.
@@ -993,15 +995,13 @@ def _tail(completed: subprocess.CompletedProcess) -> str:
 
 
 def _last_ran(text: str) -> re.Match[str] | None:
-    """unittest's closing 'Ran N tests' line, which is the last one printed.
+    """The closing 'Ran N tests' line of a unittest run, which is the last one printed.
 
     A test that prints unittest-style text would otherwise have the run
     judged by what it printed rather than by the runner's summary.
     """
-    last = None
-    for last in _RAN_RE.finditer(text):
-        pass
-    return last
+    matches = list(_RAN_RE.finditer(text))
+    return matches[-1] if matches else None
 
 
 def _tests_ran(text: str) -> int | None:
@@ -1138,22 +1138,27 @@ class Report:
     selected: int
 
     def _names(self, outcome: str) -> list[str]:
+        """Names of the mutants whose verdict is ``outcome``, in run order."""
         return [v.name for v in self.mutants if v.outcome == outcome]
 
     @property
     def applied(self) -> int:
+        """How many mutants were actually applied: every covered one except those that went stale."""
         return sum(1 for v in self.mutants if v.outcome != "stale")
 
     @property
     def survived(self) -> list[str]:
+        """Mutants the suite did not notice, which is what a failing gate is about."""
         return self._names("survived")
 
     @property
     def stale(self) -> list[str]:
+        """Mutants whose anchor text no longer appears exactly once, so they tested nothing."""
         return self._names("stale")
 
     @property
     def broken(self) -> list[str]:
+        """Mutants after which the suite could not deliver a verdict, usually because the code no longer loads."""
         return self._names("broken")
 
     @property
@@ -1163,6 +1168,10 @@ class Report:
 
     @property
     def exit_code(self) -> int:
+        """EXIT_UNUSABLE for a red control, EXIT_UNPINNED if a mutant survived, went stale or broke, else EXIT_PINNED.
+
+        A red control outranks everything, since no mutant verdict means anything without it.
+        """
         if self.control.outcome != "green":
             return EXIT_UNUSABLE
         if self.survived or self.stale or self.broken:
@@ -1182,7 +1191,8 @@ class Report:
         names = self.survived + self.stale + self.broken
         return line + (f": {', '.join(names)}" if names else "") + leaks
 
-    def as_json(self) -> dict:
+    def as_json(self) -> dict[str, object]:
+        """The report as a JSON-serialisable dict: every verdict, the counts, and the exit code."""
         return {
             "control": dataclasses.asdict(self.control),
             "mutants": [dataclasses.asdict(v) for v in self.mutants],
@@ -1233,6 +1243,7 @@ def check(spec: Spec, only: Sequence[str] = (), keep: bool = False,
 
 
 def format_verdict(v: Verdict, width: int) -> str:
+    """One aligned progress line for a verdict: name padded to ``width``, label, detail, and a kept sandbox's path."""
     label = {"green": "green", "red": "RED", "caught": "caught",
              "survived": "SURVIVED", "stale": "STALE", "broken": "BROKEN"}[v.outcome]
     line = f"  {v.name:<{width}}  {label:<8}"
@@ -1263,6 +1274,7 @@ def list_mutants(spec: Spec, mutants: Sequence[Mutant] | None = None) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """The command-line parser: an optional spec path plus --root, --only, --list, --json, --keep and --version."""
     parser = argparse.ArgumentParser(
         prog="mutt_check",
         description="Prove a test suite catches the defects it claims to pin.")
@@ -1284,6 +1296,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run the command line and return its exit status.
+
+    Loads the spec, then either lists the selected mutants (exit 0) or runs
+    the control and the mutants, printing each verdict as it lands and a
+    summary line, or the whole report as JSON with --json. A spec or
+    infrastructure error prints one line to stderr and returns EXIT_UNUSABLE.
+    """
     args = build_parser().parse_args(argv)
     try:
         spec = load_spec(Path(args.spec), args.root)

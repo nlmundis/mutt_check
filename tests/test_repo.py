@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import os
 import re
-try:
+import sys
+
+if sys.version_info >= (3, 11):
     import tomllib
-except ModuleNotFoundError:
+else:
     import tomli as tomllib
 import unittest
 from pathlib import Path
@@ -65,6 +67,7 @@ class AgentsFileTest(unittest.TestCase):
         named = set(re.findall(r"^make ([a-z][a-z-]*)", blocks, re.MULTILINE))
         named |= set(re.findall(r"`make ([a-z][a-z-]*)`", agents))
         self.assertTrue(named, "AGENTS.md names no make commands")
+        assert phony is not None
         self.assertEqual(named - set(phony.group(1).split()), set())
 
     def test_it_names_the_tool_as_the_command_actually_is(self):
@@ -92,6 +95,7 @@ class VersionSupportTest(unittest.TestCase):
     def test_ci_runs_every_version_the_package_claims(self):
         matrix = re.search(r"python: \[(.+?)\]", self.workflow)
         self.assertIsNotNone(matrix, "the workflow has no python matrix")
+        assert matrix is not None
         tested = sorted(re.findall(r"3\.\d+", matrix.group(1)),
                         key=lambda v: int(v.split(".")[1]))
         self.assertEqual(tested, self.classified())
@@ -127,6 +131,7 @@ class ReadmeExampleTest(unittest.TestCase):
                               (mutt_check.EXIT_UNUSABLE, "Control red")):
             row = re.search(rf"^\| {code} \| (.+?) \|$", README, re.MULTILINE)
             self.assertIsNotNone(row, f"README has no exit table row for {code}")
+            assert row is not None
             self.assertIn(meaning, row.group(1))
 
 

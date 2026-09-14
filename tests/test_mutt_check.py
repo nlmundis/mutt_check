@@ -16,9 +16,9 @@ import sys
 import tempfile
 import textwrap
 import unittest
-from unittest import mock
-from contextlib import redirect_stdout, redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 import mutt_check
 
@@ -54,8 +54,8 @@ MUTANT_COLLAPSE = ("collapse_dropped", "slugify.py",
                    '"[^a-z0-9]+"', '"[^a-z0-9]"')
 
 
-def toml_mutant(name, file, find, replace, **extra):
-    lines = [f"[[mutant]]", f'name = "{name}"']
+def toml_mutant(name: str, file: str | None, find: str, replace: str, **extra: str) -> str:
+    lines = ["[[mutant]]", f'name = "{name}"']
     if file is not None:
         lines.append(f'file = "{file}"')
     lines += [f"find = '''{find}'''", f"replace = '''{replace}'''"]
@@ -77,7 +77,7 @@ class Fixture:
         (self.root / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
         self.spec_path = self.root / "mutt_check.toml"
 
-    def write_spec(self, *mutants, run_extra="", top=""):
+    def write_spec(self, *mutants: tuple[str, ...] | str, run_extra: str = "", top: str = "") -> Path:
         body = f'[run]\nsuites = ["tests.test_slugify"]\n{run_extra}\n{top}\n'
         for m in mutants:
             body += toml_mutant(*m) if isinstance(m, tuple) else m
@@ -350,10 +350,11 @@ class EditTest(MutcheckCase):
         self.assertRegex(out, r"half\s+STALE")
 
     def test_apply_edits_writes_nothing_when_a_later_anchor_is_stale(self):
-        written = {}
+        written: dict[str, str] = {}
         edits = (mutt_check.Edit("a.py", "x", "y"), mutt_check.Edit("a.py", "zz", "q"))
         reason = mutt_check.apply_edits(
             edits, lambda _f: "x and more", lambda f, t: written.__setitem__(f, t))
+        assert reason is not None
         self.assertIn("appears 0x", reason)
         self.assertEqual(written, {})
 
@@ -365,7 +366,7 @@ class EditTest(MutcheckCase):
         self.assertEqual(reason, "nope")
 
     def test_second_edit_sees_the_first_edits_result(self):
-        written = {}
+        written: dict[str, str] = {}
         edits = (mutt_check.Edit("a.py", "x", "y"), mutt_check.Edit("a.py", "y", "z"))
         reason = mutt_check.apply_edits(
             edits, lambda _f: "x", lambda f, t: written.__setitem__(f, t))

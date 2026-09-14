@@ -376,7 +376,8 @@ now handled once:
 make check
 ```
 
-That runs the unit suite and then mutt_check against its own suite using the
+That runs ruff, then strict mypy against Python 3.9, then the unit suite, and
+then mutt_check against its own suite using the
 [`mutt_check.toml`](mutt_check.toml) in this repository, which reverts each of
 the rules above one at a time. Both are offline and touch nothing outside a temp
 directory. The unit suite takes seconds. The dogfood half runs one test class

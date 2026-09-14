@@ -1,0 +1,8 @@
+# Development and CI tools. None is needed to run mutt_check.
+ruff==0.16.7
+# mypy 2.x no longer accepts python_version 3.9; 1.19.1 is the newest that
+# both runs on 3.9 and checks against it, and 3.9 is this package's floor.
+mypy==1.19.1
+# Checked against 3.9, mypy follows the tomli branch of the TOML import on
+# every Python, so the stubs must be present even where tomllib exists.
+tomli==2.4.1
